@@ -1,0 +1,57 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: deep-research
+  datasource:
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/db_deep_research?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: never
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: 0
+      timeout: 3000ms
+
+tavily:
+  api-key: ${TAVILY_API_KEY:}
+  base-url: ${TAVILY_BASE_URL:https://api.tavily.com}
+
+research:
+  async:
+    max-pool-size: 10
+    queue-capacity: 50
+    task-timeout-minutes: 3
+  budget:
+    levels:
+      MEDIUM:
+        max-conduct-count: 2
+        max-search-count: 2
+        max-concurrent-units: 1
+      HIGH:
+        max-conduct-count: 4
+        max-search-count: 3
+        max-concurrent-units: 2
+      ULTRA:
+        max-conduct-count: 6
+        max-search-count: 4
+        max-concurrent-units: 3
+
+google:
+  client-id: ${GOOGLE_CLIENT_ID:}
+  client-secret: ${GOOGLE_CLIENT_SECRET:}
+  redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:8080/oauth2callback}
+
+jwt:
+  secret: ${JWT_SECRET:deep-research-jwt-secret-key-must-be-at-least-32-chars}
+  expiration: 10080
+
+app:
+  time-zone: ${APP_TIME_ZONE:Asia/Shanghai}

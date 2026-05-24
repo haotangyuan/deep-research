@@ -1,0 +1,9 @@
+services:
+  app:
+    container_name: deep-research-backend
+    image: ghcr.io/haotangyuan/deep-research:latest
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    restart: unless-stopped
