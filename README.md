@@ -2,7 +2,7 @@
 
 > 基于多智能体协作的自动化深度研究平台
 
-**在线演示**：[research.haotangyuan.dev](https://research.haotangyuan.dev)
+![img.png](img.png)
 
 ## 简介
 
