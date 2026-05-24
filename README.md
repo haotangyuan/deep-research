@@ -253,7 +253,7 @@ docker compose up -d
 
 ### 方式二：源码构建
 
-**环境要求**：JDK 21+、MySQL 8.0+、Redis 6.0+
+**环境要求**：JDK 17+、MySQL 8.0+、Redis 6.0+
 
 ```bash
 # 克隆项目
