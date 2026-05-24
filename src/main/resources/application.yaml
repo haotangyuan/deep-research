@@ -55,3 +55,13 @@ jwt:
 
 app:
   time-zone: ${APP_TIME_ZONE:Asia/Shanghai}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+  info:
+    title: Deep Research API
+    description: 基于多智能体协作的自动化深度研究平台
+    version: 1.0.0
