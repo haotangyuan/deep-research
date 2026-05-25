@@ -738,8 +738,25 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
           lastEventIdMapRef.current[researchId] = msg.id;
         }
         if (msg.data?.startsWith('[DONE]')) {
-           // 刷新最终状态
           syncResearchStatus(researchId);
+          researchApi.getMessages(researchId).then(data => {
+            if (data.messages) {
+              data.messages.forEach((m: ChatMessage) => processedIdsRef.current.add(`msg-${m.id}`));
+            }
+            if (data.events) {
+              data.events.forEach((e: WorkflowEvent) => processedIdsRef.current.add(`evt-${e.id}`));
+            }
+            setCurrentResearch(prev => prev && prev.id === researchId ? {
+              ...prev,
+              messages: data.messages || prev.messages,
+              events: data.events || prev.events,
+              status: data.status || prev.status,
+              totalInputTokens: data.totalInputTokens || prev.totalInputTokens,
+              totalOutputTokens: data.totalOutputTokens || prev.totalOutputTokens,
+              startTime: data.startTime || prev.startTime,
+              completeTime: data.completeTime || prev.completeTime,
+            } : prev);
+          }).catch(() => {});
           return;
        }
         try {
@@ -762,7 +779,9 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
               syncResearchStatus(researchId);
             }
           }
-        } catch (e) {}
+        } catch (e) {
+          console.error('SSE message parse failed', e, msg.data);
+        }
       },
       onclose: scheduleReconnect,
       onerror: () => {
@@ -823,10 +842,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
 
     if (!currentResearch) return;
 
-    const needsConnection = activeResearchRef.current !== currentResearch.id || !isConnected;
-    if (needsConnection) {
-      connectSSE(currentResearch.id);
-    }
+    connectSSE(currentResearch.id);
 
     const userMsg: ChatMessage = {
       id: Date.now(),
