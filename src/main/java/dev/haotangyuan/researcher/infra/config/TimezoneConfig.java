@@ -1,5 +1,8 @@
 package dev.haotangyuan.researcher.infra.config;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.datatype.jsr310.deser.LocalDateTimeDeserializer;
 import com.fasterxml.jackson.datatype.jsr310.ser.LocalDateTimeSerializer;
 import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
@@ -7,6 +10,8 @@ import org.springframework.boot.autoconfigure.jackson.Jackson2ObjectMapperBuilde
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.TimeZone;
@@ -37,8 +42,22 @@ public class TimezoneConfig {
         String offset = zoneId.getRules().getOffset(java.time.Instant.now()).toString();
         DateTimeFormatter offsetFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'" + offset + "'");
         
+        // 反序列化器：兼容带时区偏移的格式（如 2026-05-25T18:18:40+08:00）和无偏移格式
+        LocalDateTimeDeserializer offsetDeserializer = new LocalDateTimeDeserializer(DateTimeFormatter.ISO_LOCAL_DATE_TIME) {
+            @Override
+            public LocalDateTime deserialize(JsonParser parser, DeserializationContext context) throws java.io.IOException {
+                String text = parser.getText().trim();
+                if (text.length() > 19 && (text.charAt(text.length() - 6) == '+' || text.charAt(text.length() - 6) == '-')) {
+                    // 带时区偏移，先解析为 OffsetDateTime 再转 LocalDateTime
+                    return OffsetDateTime.parse(text, DateTimeFormatter.ISO_OFFSET_DATE_TIME).toLocalDateTime();
+                }
+                return super.deserialize(parser, context);
+            }
+        };
+
         return builder -> builder
                 .timeZone(TimeZone.getTimeZone(configuredZoneId))
-                .serializers(new LocalDateTimeSerializer(offsetFormatter));
+                .serializers(new LocalDateTimeSerializer(offsetFormatter))
+                .deserializers(offsetDeserializer);
     }
 }
