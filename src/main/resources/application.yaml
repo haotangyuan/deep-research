@@ -44,11 +44,6 @@ research:
         max-search-count: 4
         max-concurrent-units: 3
 
-google:
-  client-id: ${GOOGLE_CLIENT_ID:}
-  client-secret: ${GOOGLE_CLIENT_SECRET:}
-  redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:8080/oauth2callback}
-
 jwt:
   secret: ${JWT_SECRET:deep-research-jwt-secret-key-must-be-at-least-32-chars}
   expiration: 10080
@@ -59,8 +54,6 @@ app:
 springdoc:
   api-docs:
     path: /v3/api-docs
-  swagger-ui:
-    path: /swagger-ui.html
   info:
     title: Deep Research API
     description: 基于多智能体协作的自动化深度研究平台

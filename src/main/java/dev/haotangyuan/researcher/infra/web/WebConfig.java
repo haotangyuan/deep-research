@@ -20,9 +20,7 @@ public class WebConfig implements WebMvcConfigurer {
                 .addPathPatterns("/api/**")
                 .excludePathPatterns(
                     "/api/v1/user/register",
-                    "/api/v1/user/login",
-                    "/api/v1/user/google/callback",
-                    "/api/v1/user/google/onetap"
+                    "/api/v1/user/login"
                 );
     }
 }

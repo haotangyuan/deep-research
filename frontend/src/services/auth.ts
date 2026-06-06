@@ -10,16 +10,6 @@ const getDefaultOrigin = () => {
 const API_ROOT = import.meta.env.API_BASE_URL || getDefaultOrigin();
 const API_BASE_URL = `${API_ROOT}/api/v1/user`;
 
-// Google OAuth Config
-export const GOOGLE_CLIENT_ID = import.meta.env.GOOGLE_CLIENT_ID || '';
-const defaultRedirect = () => {
-  if (typeof window !== 'undefined' && window.location?.origin) {
-    return `${window.location.origin}/oauth2callback`;
-  }
-  return 'https://research.haotangyuan.dev/oauth2callback';
-};
-export const REDIRECT_URI = defaultRedirect();
-
 interface Result<T> {
   code: number;
   message: string;
@@ -161,23 +151,6 @@ export const authService = {
     return response.data.data;
   },
 
-  googleCallback: async (code: string): Promise<AuthResponse> => {
-    const response = await authApi.get<Result<AuthResponse>>(`/google/callback?code=${code}`);
-    if (response.data.code !== 0) {
-      throw new Error(response.data.message || 'Google login failed');
-    }
-    return response.data.data;
-  },
-
-  // Google One Tap uses credential (ID token) instead of code
-  googleOneTap: async (credential: string): Promise<AuthResponse> => {
-    const response = await authApi.post<Result<AuthResponse>>('/google/onetap', { credential });
-    if (response.data.code !== 0) {
-      throw new Error(response.data.message || 'Google login failed');
-    }
-    return response.data.data;
-  },
-
   getMe: async (): Promise<UserInfo> => {
     const response = await authApi.get<Result<UserInfo>>('/me');
     if (response.data.code !== 0) {
@@ -188,17 +161,5 @@ export const authService = {
 
   logout: () => {
     removeToken();
-  },
-
-  // Build Google OAuth URL for redirect flow
-  getGoogleAuthUrl: () => {
-    return (
-      `https://accounts.google.com/o/oauth2/v2/auth` +
-      `?client_id=${GOOGLE_CLIENT_ID}` +
-      `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
-      `&response_type=code` +
-      `&scope=openid` +
-      `&access_type=offline`
-    );
   },
 };

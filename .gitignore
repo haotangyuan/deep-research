@@ -37,4 +37,16 @@ build/
 .env.local
 .env.*.local
 .DS_Store
-.codegraph/
+
+### Claude Code ###
+.claude/
+.codex/
+
+### Logs ###
+*.log
+app.log
+
+### Node.js ###
+node_modules/
+frontend/dist/
+frontend/node_modules/

@@ -1,77 +1,24 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { X, Lock, User, Loader2, AlertCircle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { GOOGLE_CLIENT_ID } from '../services/auth';
 
 type AuthMode = 'login' | 'register';
 
 export function AuthModal() {
-  const { isAuthModalOpen, closeAuthModal, login, register, loginWithGoogle, startGoogleOAuth } = useAuth();
+  const { isAuthModalOpen, closeAuthModal, login, register } = useAuth();
   const [mode, setMode] = useState<AuthMode>('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isGoogleButtonReady, setGoogleButtonReady] = useState(false);
-  const googleButtonRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isAuthModalOpen) {
       setUsername('');
       setPassword('');
       setError(null);
-      setGoogleButtonReady(false);
     }
   }, [isAuthModalOpen]);
-
-  // Render Google Sign-In button
-  useEffect(() => {
-    if (!isAuthModalOpen || !GOOGLE_CLIENT_ID || !googleButtonRef.current) return;
-
-    const renderButton = () => {
-      if (typeof google === 'undefined' || !google.accounts) return;
-
-      google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: async (response) => {
-          setIsLoading(true);
-          setError(null);
-          try {
-            await loginWithGoogle(response.credential);
-          } catch (err: any) {
-            setError(err.message || 'Google login failed');
-          } finally {
-            setIsLoading(false);
-          }
-        },
-      });
-
-      if (googleButtonRef.current) {
-        googleButtonRef.current.innerHTML = '';
-      }
-
-      google.accounts.id.renderButton(googleButtonRef.current!, {
-        type: 'standard',
-        theme: 'outline',
-        size: 'large',
-        text: 'continue_with',
-        shape: 'rectangular',
-        width: 320,
-      });
-
-      setGoogleButtonReady(true);
-    };
-
-    // Wait for Google script to load
-    const checkGoogle = setInterval(() => {
-      if (typeof google !== 'undefined' && google.accounts) {
-        clearInterval(checkGoogle);
-        renderButton();
-      }
-    }, 100);
-
-    return () => clearInterval(checkGoogle);
-  }, [isAuthModalOpen, loginWithGoogle]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,7 +45,7 @@ export function AuthModal() {
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
       {/* Backdrop */}
-      <div 
+      <div
         className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={closeAuthModal}
       />
@@ -123,41 +70,11 @@ export function AuthModal() {
               {mode === 'login' ? '欢迎回来' : '创建账户'}
             </h2>
             <p className="text-gray-500 mt-1 text-sm">
-              {mode === 'login' 
-                ? '登录以继续您的研究' 
+              {mode === 'login'
+                ? '登录以继续您的研究'
                 : '开始使用 Deep Research'}
             </p>
           </div>
-
-          {/* Google Sign-In */}
-          {GOOGLE_CLIENT_ID && (
-            <>
-              <div 
-                ref={googleButtonRef} 
-                className="flex justify-center mb-4"
-              />
-
-              {!isGoogleButtonReady && (
-                <button
-                  type="button"
-                  onClick={startGoogleOAuth}
-                  className="w-full mb-6 py-2.5 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
-                >
-                  <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-4 h-4" />
-                  使用 Google 账号登录
-                </button>
-              )}
-
-              <div className="relative mb-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-200" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-white px-3 text-gray-400">或</span>
-                </div>
-              </div>
-            </>
-          )}
 
           {/* Error */}
           {error && (

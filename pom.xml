@@ -27,7 +27,7 @@
         <url/>
     </scm>
     <properties>
-        <java.version>17</java.version>
+        <java.version>21</java.version>
         <langchain4j.version>1.8.0</langchain4j.version>
         <hutool.version>5.8.32</hutool.version>
         <okhttp.version>4.12.0</okhttp.version>
@@ -96,10 +96,10 @@
             <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
         </dependency>
-        <!-- SpringDoc OpenAPI -->
+        <!-- SpringDoc OpenAPI (without Swagger UI) -->
         <dependency>
             <groupId>org.springdoc</groupId>
-            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <artifactId>springdoc-openapi-starter-webmvc-api</artifactId>
             <version>2.5.0</version>
         </dependency>
 

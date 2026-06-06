@@ -9,7 +9,6 @@ import { getToken } from './services/auth';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/AuthModal';
 import { UserMenu } from './components/UserMenu';
-import { OAuthCallback } from './pages/OAuthCallback';
 import { ModelManagerModal } from './components/ModelManagerModal';
 import { BUDGET_OPTIONS, BudgetValue } from './constants/budget';
 import ArenaPage from './pages/ArenaPage';
@@ -1285,7 +1284,6 @@ function App() {
   return (
     <AuthProvider>
       <Routes>
-        <Route path="/oauth2callback" element={<OAuthCallback />} />
         <Route path="/*" element={<AppContent />} />
       </Routes>
     </AuthProvider>

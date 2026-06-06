@@ -234,7 +234,29 @@ state.setTotalOutputTokens(state.getTotalOutputTokens() + usage.outputTokenCount
 
 ## 快速开始
 
-### 方式一：Docker 部署（推荐）
+### 方式一：使用启动脚本（推荐）
+
+**环境要求**：Java 21、Maven 3.8+、MySQL 8.0+、Redis 6.0+
+
+```bash
+# 克隆项目
+git clone https://github.com/haotangyuan/deep-research.git
+cd deep-research
+
+# 配置环境变量（参考下方"环境变量配置"）
+cp .env.example .env && vim .env
+
+# 使用启动脚本（自动检查环境、创建数据库、编译启动）
+./start.sh
+```
+
+启动脚本会自动：
+- 检查 Java 21 和 Maven 版本
+- 验证 MySQL 和 Redis 连接
+- 创建数据库和表结构
+- 编译项目并启动应用
+
+### 方式二：Docker 部署
 
 ```bash
 # 拉取镜像
@@ -251,9 +273,9 @@ docker run -d -p 8080:8080 --env-file .env --name deep-research ghcr.io/haotangy
 docker compose up -d
 ```
 
-### 方式二：源码构建
+### 方式三：手动构建
 
-**环境要求**：JDK 17+、MySQL 8.0+、Redis 6.0+
+**环境要求**：Java 21、Maven 3.8+、MySQL 8.0+、Redis 6.0+
 
 ```bash
 # 克隆项目
@@ -267,11 +289,15 @@ cp .env.example .env && vim .env
 mysql -u root -p -e "CREATE DATABASE db_deep_research"
 mysql -u root -p db_deep_research < src/main/resources/data.sql
 
-# 启动服务
-./mvnw spring-boot:run
+# 编译并启动
+mvn clean package -DskipTests
+java -jar target/researcher-0.0.1-SNAPSHOT.jar
 ```
 
 后端 API 启动于 `http://localhost:8080`
+
+- **API 文档 (Scalar)**: http://localhost:8080/scalar/index.html
+- **OpenAPI 规范**: http://localhost:8080/v3/api-docs
 
 ### 环境变量配置
 
@@ -294,11 +320,6 @@ TAVILY_BASE_URL=https://api.tavily.com
 
 # JWT 签名密钥（至少 32 字符）
 JWT_SECRET=your-secret-key-at-least-32-characters
-
-# Google OAuth（如需 Google 登录）
-GOOGLE_CLIENT_ID=xxxxx.apps.googleusercontent.com
-GOOGLE_CLIENT_SECRET=xxxxx
-GOOGLE_REDIRECT_URI=http://localhost:8080/oauth2callback
 
 # 时区
 APP_TIME_ZONE=Asia/Shanghai
@@ -346,3 +367,58 @@ src/main/java/dev/haotangyuan/researcher/
     ├── controller/           # REST API
     └── service/              # 业务服务
 ```
+
+## API 接口文档
+
+> 完整的 API 文档请访问启动后的 Scalar UI：http://localhost:8080/scalar/index.html
+
+### 认证说明
+
+所有需要认证的接口都需要在请求头中携带 JWT Token：
+
+```
+Authorization: Bearer <your_jwt_token>
+```
+
+### 接口列表
+
+#### 用户认证
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| POST | `/api/v1/user/register` | 用户注册 | ❌ |
+| POST | `/api/v1/user/login` | 用户登录 | ❌ |
+| GET | `/api/v1/user/me` | 获取当前用户信息 | ✅ |
+
+#### 研究管理
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| GET | `/api/v1/research/create` | 创建研究会话 | ✅ |
+| GET | `/api/v1/research/list` | 获取研究列表 | ✅ |
+| GET | `/api/v1/research/{researchId}` | 获取研究状态 | ✅ |
+| GET | `/api/v1/research/{researchId}/messages` | 获取研究消息和事件 | ✅ |
+| POST | `/api/v1/research/{researchId}/messages` | 发送消息 | ✅ |
+| GET | `/api/v1/research/sse` | SSE 实时事件流 | ✅ |
+
+#### 模型管理
+
+| 方法 | 路径 | 说明 | 认证 |
+|------|------|------|------|
+| GET | `/api/v1/models` | 获取可用模型列表 | ✅ |
+| POST | `/api/v1/models` | 添加自定义模型 | ✅ |
+| DELETE | `/api/v1/models/{modelId}` | 删除自定义模型 | ✅ |
+
+### 研究状态说明
+
+| 状态 | 说明 |
+|------|------|
+| NEW | 新建研究 |
+| QUEUE | 排队中 |
+| START | 开始研究 |
+| IN_SCOPE | 确定研究范围 |
+| NEED_CLARIFICATION | 需要用户澄清 |
+| IN_RESEARCH | 研究中 |
+| IN_REPORT | 生成报告中 |
+| COMPLETED | 研究完成 |
+| FAILED | 研究失败 |
