@@ -3,6 +3,13 @@ package dev.haotangyuan.researcher.application.agent;
 import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatRequest;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatResponse;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchMemory;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchMessage;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolCall;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolSpec;
+import dev.haotangyuan.researcher.application.agent.runtime.ToolChoiceMode;
 import dev.haotangyuan.researcher.infra.data.EventType;
 import dev.haotangyuan.researcher.application.model.ModelHandler;
 import dev.haotangyuan.researcher.application.state.DeepResearchState;
@@ -10,17 +17,6 @@ import dev.haotangyuan.researcher.infra.util.EventPublisher;
 import dev.haotangyuan.researcher.application.tool.annotation.ResearcherTool;
 import dev.haotangyuan.researcher.infra.exception.WorkflowException;
 import dev.haotangyuan.researcher.application.tool.ToolRegistry;
-import dev.langchain4j.agent.tool.ToolExecutionRequest;
-import dev.langchain4j.agent.tool.ToolSpecification;
-import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.ToolExecutionResultMessage;
-import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.chat.request.ChatRequest;
-import dev.langchain4j.model.chat.request.ToolChoice;
-import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.model.output.TokenUsage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -56,16 +52,15 @@ public class ResearcherAgent {
         state.setCurrentResearchEventId(researchEventId);
         
         AgentAbility agent = AgentAbility.builder()
-                .memory(MessageWindowChatMemory.withMaxMessages(100))
-                .chatModel(modelHandler.getModel(state.getResearchId()))
-                .streamingChatModel(modelHandler.getStreamModel(state.getResearchId()))
+                .memory(new ResearchMemory(100))
+                .chatClient(modelHandler.getChatClient(state.getResearchId()))
                 .build();
         
-        SystemMessage systemMessage = SystemMessage.from(
+        ResearchMessage systemMessage = ResearchMessage.system(
             StrUtil.format(RESEARCH_AGENT_PROMPT,Map.of("date", DateUtil.today()))
         );
         agent.getMemory().add(systemMessage);
-        agent.getMemory().add(UserMessage.from(state.getResearchTopic()));
+        agent.getMemory().add(ResearchMessage.user(state.getResearchTopic()));
         
         plan(agent, state);
         return compressResearch(agent, state);
@@ -79,23 +74,20 @@ public class ResearcherAgent {
         while (state.getSearchCount() < maxSearchCount 
                 && state.getResearcherIterations() < maxIterations) {
             // 1. 获取决策
-            List<ToolSpecification> toolSpecifications = toolRegistry.getToolSpecifications(RESEARCHER_STAGE);
-            ChatRequest chatRequest = ChatRequest.builder()
-                    .messages(agent.getMemory().messages())
-                    .toolSpecifications(toolSpecifications)
-                    .toolChoice(ToolChoice.REQUIRED)
-                    .build();
-            ChatResponse chatResponse = agent.getChatModel().chat(chatRequest);
-            TokenUsage tokenUsage = chatResponse.tokenUsage();
-            state.setTotalInputTokens(state.getTotalInputTokens() + tokenUsage.inputTokenCount());
-            state.setTotalOutputTokens(state.getTotalOutputTokens() + tokenUsage.outputTokenCount());
+            List<ResearchToolSpec> toolSpecifications = toolRegistry.getToolSpecifications(RESEARCHER_STAGE);
+            ResearchChatResponse chatResponse = agent.getChatClient().chat(new ResearchChatRequest(
+                    agent.getMemory().messages(),
+                    toolSpecifications,
+                    ToolChoiceMode.REQUIRED));
+            state.setTotalInputTokens(state.getTotalInputTokens() + chatResponse.tokenUsage().inputTokenCount());
+            state.setTotalOutputTokens(state.getTotalOutputTokens() + chatResponse.tokenUsage().outputTokenCount());
             agent.getMemory().add(chatResponse.aiMessage());
 
             // 2. 执行工具
-            action(agent, chatResponse.aiMessage().toolExecutionRequests(), state);
+            action(agent, chatResponse.aiMessage().toolCalls(), state);
             
             // 3. 检查是否继续
-            if (!chatResponse.aiMessage().hasToolExecutionRequests()) {
+            if (chatResponse.aiMessage().toolCalls().isEmpty()) {
                 break;
             }
             
@@ -103,12 +95,12 @@ public class ResearcherAgent {
         }
     }
 
-    private void action(AgentAbility agent, List<ToolExecutionRequest> toolExecutionRequests, DeepResearchState state) {
+    private void action(AgentAbility agent, List<ResearchToolCall> toolExecutionRequests, DeepResearchState state) {
         if (toolExecutionRequests == null || toolExecutionRequests.isEmpty()) {
             return;
         }
         
-        for (ToolExecutionRequest toolExecutionRequest : toolExecutionRequests) {
+        for (ResearchToolCall toolExecutionRequest : toolExecutionRequests) {
             String result;
             
             if ("tavilySearch".equals(toolExecutionRequest.name())) {
@@ -118,7 +110,7 @@ public class ResearcherAgent {
                     log.warn("tavilySearch count limit reached: {}/{}",
                             state.getSearchCount(), maxSearchCount);
                     result = "已达到搜索配额限制，请根据已有信息完成研究";
-                    agent.getMemory().add(ToolExecutionResultMessage.from(toolExecutionRequest, result));
+                    agent.getMemory().add(toolResult(toolExecutionRequest, result));
                     continue;
                 }
                 
@@ -149,7 +141,7 @@ public class ResearcherAgent {
                     log.warn("No executor found for tool {} in stage {}", toolExecutionRequest.name(), RESEARCHER_STAGE);
                     continue;
                 }
-                result = executor.execute(toolExecutionRequest, null);
+                result = executor.execute(toolExecutionRequest);
             }
             
             // 收集 rawNotes 即工具执行结果 ThinkTool 和 Search 结果
@@ -159,28 +151,23 @@ public class ResearcherAgent {
             }
             state.getResearcherNotes().add(String.format("[%s] %s", toolExecutionRequest.name(), result));
             
-            agent.getMemory().add(ToolExecutionResultMessage.from(toolExecutionRequest, result));
+            agent.getMemory().add(toolResult(toolExecutionRequest, result));
         }
     }
 
     private String compressResearch(AgentAbility agent, DeepResearchState state) {
         String systemPrompt = StrUtil.format(COMPRESS_RESEARCH_SYSTEM_PROMPT, Map.of("date", DateUtil.today()));
         
-        List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(systemPrompt));
+        List<ResearchMessage> messages = new ArrayList<>();
+        messages.add(ResearchMessage.system(systemPrompt));
         // 跳过前两条（ResearcherAgent 的 system + user），只保留工具调用历史
         messages.addAll(agent.getMemory().messages().stream().skip(2).collect(Collectors.toList()));
-        messages.add(UserMessage.from(
+        messages.add(ResearchMessage.user(
             StrUtil.format(COMPRESS_RESEARCH_HUMAN_MESSAGE, Map.of("research_topic", state.getResearchTopic()))));
         
-        ChatRequest compressRequest = ChatRequest.builder()
-                .messages(messages)
-                .build();
-        
-        ChatResponse compressResponse = agent.getChatModel().chat(compressRequest);
-        TokenUsage tokenUsage = compressResponse.tokenUsage();
-        state.setTotalInputTokens(state.getTotalInputTokens() + tokenUsage.inputTokenCount());
-        state.setTotalOutputTokens(state.getTotalOutputTokens() + tokenUsage.outputTokenCount());
+        ResearchChatResponse compressResponse = agent.getChatClient().chat(ResearchChatRequest.textOnly(messages));
+        state.setTotalInputTokens(state.getTotalInputTokens() + compressResponse.tokenUsage().inputTokenCount());
+        state.setTotalOutputTokens(state.getTotalOutputTokens() + compressResponse.tokenUsage().outputTokenCount());
         String compressedResearch = compressResponse.aiMessage().text();
         
         state.setCompressedResearch(compressedResearch);
@@ -188,5 +175,9 @@ public class ResearcherAgent {
                 "已完成该主题研究", compressedResearch.substring(0, Math.min(200, compressedResearch.length())) + "...", state.getCurrentResearchEventId());
         
         return compressedResearch;
+    }
+
+    private ResearchMessage toolResult(ResearchToolCall toolExecutionRequest, String result) {
+        return ResearchMessage.toolResult(toolExecutionRequest, result);
     }
 }

@@ -1,8 +1,7 @@
 package dev.haotangyuan.researcher.application.agent;
 
-import dev.langchain4j.memory.ChatMemory;
-import dev.langchain4j.model.chat.ChatModel;
-import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatClient;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchMemory;
 import lombok.Builder;
 import lombok.Data;
 
@@ -12,7 +11,6 @@ import lombok.Data;
 @Data
 @Builder
 public class AgentAbility {
-    private final ChatMemory memory;
-    private final ChatModel chatModel;
-    private final StreamingChatModel streamingChatModel;
+    private final ResearchMemory memory;
+    private final ResearchChatClient chatClient;
 }

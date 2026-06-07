@@ -5,8 +5,6 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import dev.haotangyuan.researcher.application.data.WorkflowStatus;
 import dev.haotangyuan.researcher.application.state.DeepResearchState;
 import dev.haotangyuan.researcher.application.workflow.AgentPipeline;
-import dev.langchain4j.data.message.AiMessage;
-import dev.langchain4j.data.message.UserMessage;
 import dev.haotangyuan.researcher.domain.entity.ChatMessage;
 import dev.haotangyuan.researcher.domain.entity.ResearchSession;
 import dev.haotangyuan.researcher.domain.entity.WorkflowEvent;
@@ -23,6 +21,7 @@ import dev.haotangyuan.researcher.interfaces.dto.resp.SendMessageRespDTO;
 import dev.haotangyuan.researcher.infra.config.BudgetProps;
 import dev.haotangyuan.researcher.infra.data.TimelineItem;
 import dev.haotangyuan.researcher.infra.util.CacheUtil;
+import dev.haotangyuan.researcher.infra.util.ResearchMessageConverter;
 import dev.haotangyuan.researcher.interfaces.service.ResearchService;
 import dev.haotangyuan.researcher.interfaces.service.ModelService;
 import lombok.RequiredArgsConstructor;
@@ -218,14 +217,7 @@ public class ResearchServiceImpl implements ResearchService {
                 .orderByAsc(ChatMessage::getSequenceNo);
         List<ChatMessage> dbMessages = chatMessageMapper.selectList(historyQuery);
         
-        List<dev.langchain4j.data.message.ChatMessage> chatHistory =  new ArrayList<>();
-        for (ChatMessage msg : dbMessages) {
-            if ("user".equals(msg.getRole())) {
-                chatHistory.add(UserMessage.from(msg.getContent()));
-            } else if ("assistant".equals(msg.getRole())) {
-                chatHistory.add(AiMessage.from(msg.getContent()));
-            }
-        }
+        var chatHistory = ResearchMessageConverter.fromDbMessages(dbMessages);
 
         // 构建 state 并启动研究流程
         DeepResearchState state = DeepResearchState.builder()

@@ -3,10 +3,10 @@ package dev.haotangyuan.researcher.application.state;
 import java.util.List;
 import java.util.Map;
 
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchMessage;
 import dev.haotangyuan.researcher.application.schema.ScopeSchema;
 import dev.haotangyuan.researcher.infra.client.TavilyClient;
 import dev.haotangyuan.researcher.infra.config.BudgetProps;
-import dev.langchain4j.data.message.ChatMessage;
 import lombok.Builder;
 import lombok.Data;
 
@@ -20,7 +20,7 @@ public class DeepResearchState {
 
     // === 基础信息 ===
     private String researchId;
-    private List<ChatMessage> chatHistory;  // 包含历史消息 + 本次消息
+    private List<ResearchMessage> chatHistory;  // 包含历史消息 + 本次消息
     private String status;
 
     // === Scope 阶段产物 ===

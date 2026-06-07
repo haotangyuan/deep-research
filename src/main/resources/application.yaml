@@ -25,6 +25,8 @@ tavily:
   base-url: ${TAVILY_BASE_URL:https://api.tavily.com}
 
 research:
+  agent:
+    framework: ${RESEARCH_AGENT_FRAMEWORK:agentscope-java}
   async:
     max-pool-size: 10
     queue-capacity: 50

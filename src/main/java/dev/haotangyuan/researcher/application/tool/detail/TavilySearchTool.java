@@ -1,8 +1,8 @@
 package dev.haotangyuan.researcher.application.tool.detail;
 
 import dev.haotangyuan.researcher.application.tool.annotation.ResearcherTool;
-import dev.langchain4j.agent.tool.P;
-import dev.langchain4j.agent.tool.Tool;
+import dev.haotangyuan.researcher.application.tool.annotation.ResearchTool;
+import dev.haotangyuan.researcher.application.tool.annotation.ResearchToolParam;
 
 /**
  * Tavily web search tool specification for researcher agent.
@@ -12,7 +12,7 @@ import dev.langchain4j.agent.tool.Tool;
 @ResearcherTool
 public class TavilySearchTool {
     
-    @Tool("""
+    @ResearchTool(name = "tavilySearch", description = """
             Fetch results from Tavily search API with content summarization.
             
             Use this tool to search the web for information relevant to your research topic.
@@ -31,13 +31,19 @@ public class TavilySearchTool {
             """
     )
     public String tavilySearch(
-            @P(value = "A specific search query to execute. Should be clear, focused, and relevant to the research topic.",
+            @ResearchToolParam(
+                    name = "query",
+                    description = "A specific search query to execute. Should be clear, focused, and relevant to the research topic.",
                     required = true)
             String query,
-            @P(value = "Maximum number of results to return. Default is 3.",
+            @ResearchToolParam(
+                    name = "maxResults",
+                    description = "Maximum number of results to return. Default is 3.",
                     required = false)
             Integer maxResults,
-            @P(value = "Topic to filter results by: 'general', 'news', or 'finance'. Default is 'general'.",
+            @ResearchToolParam(
+                    name = "topic",
+                    description = "Topic to filter results by: 'general', 'news', or 'finance'. Default is 'general'.",
                     required = false)
             String topic
     ) {

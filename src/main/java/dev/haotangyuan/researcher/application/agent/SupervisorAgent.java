@@ -3,6 +3,13 @@ package dev.haotangyuan.researcher.application.agent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.StrUtil;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchMemory;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatRequest;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatResponse;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchMessage;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolCall;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolSpec;
+import dev.haotangyuan.researcher.application.agent.runtime.ToolChoiceMode;
 import dev.haotangyuan.researcher.application.data.WorkflowStatus;
 import dev.haotangyuan.researcher.application.model.ModelHandler;
 import dev.haotangyuan.researcher.application.state.DeepResearchState;
@@ -11,16 +18,6 @@ import dev.haotangyuan.researcher.application.tool.annotation.SupervisorTool;
 import dev.haotangyuan.researcher.infra.data.EventType;
 import dev.haotangyuan.researcher.infra.exception.WorkflowException;
 import dev.haotangyuan.researcher.infra.util.EventPublisher;
-import dev.langchain4j.agent.tool.ToolExecutionRequest;
-import dev.langchain4j.agent.tool.ToolSpecification;
-import dev.langchain4j.data.message.SystemMessage;
-import dev.langchain4j.data.message.ToolExecutionResultMessage;
-import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.chat.request.ChatRequest;
-import dev.langchain4j.model.chat.request.ToolChoice;
-import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.model.output.TokenUsage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -53,18 +50,17 @@ public class SupervisorAgent {
                 EventType.SUPERVISOR, "开始规划研究路线...", state.getResearchBrief());
         state.setCurrentSupervisorEventId(supervisorEventId);
         AgentAbility agent = AgentAbility.builder()
-                .memory(MessageWindowChatMemory.withMaxMessages(100))
-                .chatModel(modelHandler.getModel(state.getResearchId()))
-                .streamingChatModel(modelHandler.getStreamModel(state.getResearchId()))
+                .memory(new ResearchMemory(100))
+                .chatClient(modelHandler.getChatClient(state.getResearchId()))
                 .build();
-        SystemMessage systemMessage = SystemMessage.from(
+        ResearchMessage systemMessage = ResearchMessage.system(
                 StrUtil.format(LEAD_RESEARCHER_PROMPT, Map.of(
                         "date", DateUtil.today(),
                         "max_concurrent_research_units", state.getBudget().getMaxConcurrentUnits(),
                         "max_researcher_iterations", state.getBudget().getMaxConductCount()
                 )));
         agent.getMemory().add(systemMessage);
-        agent.getMemory().add(UserMessage.from(state.getResearchBrief()));
+        agent.getMemory().add(ResearchMessage.user(state.getResearchBrief()));
         plan(agent, state);
     }
 
@@ -76,21 +72,18 @@ public class SupervisorAgent {
         while (state.getConductCount() < maxConductCount
                 && state.getSupervisorIterations() < maxIterations) {
             // 1. 获取决策
-            List<ToolSpecification> toolSpecifications = toolRegistry.getToolSpecifications(SUPERVISOR_STAGE);
-            ChatRequest chatRequest = ChatRequest.builder()
-                    .toolSpecifications(toolSpecifications)
-                    .toolChoice(ToolChoice.REQUIRED)
-                    .messages(agent.getMemory().messages())
-                    .build();
-            ChatResponse chatResponse = agent.getChatModel().chat(chatRequest);
-            TokenUsage tokenUsage = chatResponse.tokenUsage();
-            state.setTotalInputTokens(state.getTotalInputTokens() + tokenUsage.inputTokenCount());
-            state.setTotalOutputTokens(state.getTotalOutputTokens() + tokenUsage.outputTokenCount());
+            List<ResearchToolSpec> toolSpecifications = toolRegistry.getToolSpecifications(SUPERVISOR_STAGE);
+            ResearchChatResponse chatResponse = agent.getChatClient().chat(new ResearchChatRequest(
+                    agent.getMemory().messages(),
+                    toolSpecifications,
+                    ToolChoiceMode.REQUIRED));
+            state.setTotalInputTokens(state.getTotalInputTokens() + chatResponse.tokenUsage().inputTokenCount());
+            state.setTotalOutputTokens(state.getTotalOutputTokens() + chatResponse.tokenUsage().outputTokenCount());
             agent.getMemory().add(chatResponse.aiMessage());
 
-            List<ToolExecutionRequest> toolExecutionRequests = chatResponse.aiMessage().toolExecutionRequests();
+            List<ResearchToolCall> toolExecutionRequests = chatResponse.aiMessage().toolCalls();
             if (toolExecutionRequests == null || toolExecutionRequests.isEmpty()) {
-                agent.getMemory().add(UserMessage.from(TOOL_REMINDER));
+                agent.getMemory().add(ResearchMessage.user(TOOL_REMINDER));
                 state.setSupervisorIterations(state.getSupervisorIterations() + 1);
                 continue;
             }
@@ -108,11 +101,11 @@ public class SupervisorAgent {
         }
     }
 
-    private void action(AgentAbility agent, List<ToolExecutionRequest> toolExecutionRequests, DeepResearchState state) {
+    private void action(AgentAbility agent, List<ResearchToolCall> toolExecutionRequests, DeepResearchState state) {
         if (toolExecutionRequests == null || toolExecutionRequests.isEmpty()) {
             return;
         }
-        for (ToolExecutionRequest toolExecutionRequest : toolExecutionRequests) {
+        for (ResearchToolCall toolExecutionRequest : toolExecutionRequests) {
             String result;
 
             if ("conductResearch".equals(toolExecutionRequest.name())) {
@@ -122,7 +115,7 @@ public class SupervisorAgent {
                     log.warn("conductResearch count limit reached: {}/{}",
                             state.getConductCount(), maxConductCount);
                     result = "已达到研究任务配额限制，请调用 researchComplete 完成研究";
-                    agent.getMemory().add(ToolExecutionResultMessage.from(toolExecutionRequest, result));
+                    agent.getMemory().add(toolResult(toolExecutionRequest, result));
                     continue;
                 }
 
@@ -155,7 +148,7 @@ public class SupervisorAgent {
                     log.warn("No executor found for tool {} in stage {}", toolExecutionRequest.name(), SUPERVISOR_STAGE);
                     continue;
                 }
-                result = executor.execute(toolExecutionRequest, null);
+                result = executor.execute(toolExecutionRequest);
             }
 
             if (toolExecutionRequest.name().equals("thinkTool")) {
@@ -166,7 +159,11 @@ public class SupervisorAgent {
                 state.getSupervisorNotes().add(result);
             }
 
-            agent.getMemory().add(ToolExecutionResultMessage.from(toolExecutionRequest, result));
+            agent.getMemory().add(toolResult(toolExecutionRequest, result));
         }
+    }
+
+    private ResearchMessage toolResult(ResearchToolCall toolExecutionRequest, String result) {
+        return ResearchMessage.toolResult(toolExecutionRequest, result);
     }
 }

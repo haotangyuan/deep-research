@@ -1,12 +1,11 @@
 package dev.haotangyuan.researcher.application.tool;
 
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolParameter;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolSpec;
 import dev.haotangyuan.researcher.application.tool.annotation.ResearcherTool;
+import dev.haotangyuan.researcher.application.tool.annotation.ResearchTool;
+import dev.haotangyuan.researcher.application.tool.annotation.ResearchToolParam;
 import dev.haotangyuan.researcher.application.tool.annotation.SupervisorTool;
-import dev.langchain4j.agent.tool.Tool;
-import dev.langchain4j.agent.tool.ToolSpecification;
-import dev.langchain4j.agent.tool.ToolSpecifications;
-import dev.langchain4j.service.tool.DefaultToolExecutor;
-import dev.langchain4j.service.tool.ToolExecutor;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 
@@ -19,14 +18,14 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Registry for all LangChain4j tools. Tools are grouped by stage based on marker annotations
+ * Registry for project-owned tool metadata. Tools are grouped by stage based on marker annotations.
  * @author: haotangyuan
  */
 @Component
 public class ToolRegistry {
 
-    private final Map<String, ToolExecutor> toolExecutors = new ConcurrentHashMap<>();
-    private final Map<String, List<ToolSpecification>> toolSpecificationsByStage = new ConcurrentHashMap<>();
+    private final Map<String, ResearchToolExecutor> toolExecutors = new ConcurrentHashMap<>();
+    private final Map<String, List<ResearchToolSpec>> toolSpecificationsByStage = new ConcurrentHashMap<>();
 
     public ToolRegistry(ApplicationContext applicationContext) {
         registerStage(applicationContext, SupervisorTool.class);
@@ -40,28 +39,45 @@ public class ToolRegistry {
         }
 
         String stageName = markerAnnotation.getSimpleName();
-        List<ToolSpecification> specifications = new ArrayList<>();
+        List<ResearchToolSpec> specifications = new ArrayList<>();
 
         for (Object toolBean : beansWithAnnotation.values()) {
             for (Method method : toolBean.getClass().getMethods()) {
-                if (!method.isAnnotationPresent(Tool.class)) {
+                if (!method.isAnnotationPresent(ResearchTool.class)) {
                     continue;
                 }
 
-                ToolSpecification specification = ToolSpecifications.toolSpecificationFrom(method);
+                ResearchToolSpec specification = toolSpecificationFrom(method);
                 specifications.add(specification);
-                toolExecutors.putIfAbsent(specification.name(), new DefaultToolExecutor(toolBean, method));
+                toolExecutors.putIfAbsent(specification.name(), new ReflectiveResearchToolExecutor(toolBean, method));
             }
         }
 
         toolSpecificationsByStage.put(stageName, Collections.unmodifiableList(specifications));
     }
 
-    public List<ToolSpecification> getToolSpecifications(String stageName) {
+    public List<ResearchToolSpec> getToolSpecifications(String stageName) {
         return toolSpecificationsByStage.getOrDefault(stageName, Collections.emptyList());
     }
 
-    public ToolExecutor getExecutor(String toolName) {
+    public ResearchToolExecutor getExecutor(String toolName) {
         return toolExecutors.get(toolName);
+    }
+
+    private ResearchToolSpec toolSpecificationFrom(Method method) {
+        ResearchTool tool = method.getAnnotation(ResearchTool.class);
+        List<ResearchToolParameter> parameters = new ArrayList<>();
+        for (java.lang.reflect.Parameter parameter : method.getParameters()) {
+            ResearchToolParam metadata = parameter.getAnnotation(ResearchToolParam.class);
+            if (metadata == null) {
+                continue;
+            }
+            parameters.add(new ResearchToolParameter(
+                    metadata.name(),
+                    metadata.description(),
+                    metadata.required(),
+                    parameter.getType()));
+        }
+        return new ResearchToolSpec(tool.name(), tool.description(), parameters);
     }
 }

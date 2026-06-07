@@ -1,9 +1,9 @@
 package dev.haotangyuan.researcher.application.tool.detail;
 
 import dev.haotangyuan.researcher.application.tool.annotation.ResearcherTool;
+import dev.haotangyuan.researcher.application.tool.annotation.ResearchTool;
+import dev.haotangyuan.researcher.application.tool.annotation.ResearchToolParam;
 import dev.haotangyuan.researcher.application.tool.annotation.SupervisorTool;
-import dev.langchain4j.agent.tool.P;
-import dev.langchain4j.agent.tool.Tool;
 
 /**
  * @author: haotangyuan
@@ -11,7 +11,7 @@ import dev.langchain4j.agent.tool.Tool;
 @ResearcherTool
 @SupervisorTool
 public class ThinkTool {
-    @Tool("""
+    @ResearchTool(name = "thinkTool", description = """
             Tool for strategic reflection on research progress and decision-making.
             
             Use this tool after each search to analyze results and plan next steps systematically.
@@ -31,7 +31,10 @@ public class ThinkTool {
             """
     )
     public String thinkTool(
-            @P(value = "Detailed reflection on progress, findings, gaps, and next steps", required = true)
+            @ResearchToolParam(
+                    name = "reflection",
+                    description = "Detailed reflection on progress, findings, gaps, and next steps",
+                    required = true)
             String reflection
     ) {
         return "Reflection recorded: " + reflection;

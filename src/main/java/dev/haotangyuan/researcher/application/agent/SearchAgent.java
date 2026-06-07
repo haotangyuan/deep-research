@@ -3,21 +3,22 @@ package dev.haotangyuan.researcher.application.agent;
 import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatRequest;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatResponse;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchMemory;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchMessage;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchTokenUsage;
 import dev.haotangyuan.researcher.infra.data.EventType;
 import dev.haotangyuan.researcher.application.model.ModelHandler;
 import dev.haotangyuan.researcher.infra.util.EventPublisher;
 import dev.haotangyuan.researcher.application.schema.SummarySchema;
 import dev.haotangyuan.researcher.application.state.DeepResearchState;
 import dev.haotangyuan.researcher.infra.client.TavilyClient;
-import dev.langchain4j.data.message.UserMessage;
-import dev.langchain4j.memory.chat.MessageWindowChatMemory;
-import dev.langchain4j.model.chat.request.ChatRequest;
-import dev.langchain4j.model.chat.response.ChatResponse;
-import dev.langchain4j.model.output.TokenUsage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -42,9 +43,8 @@ public class SearchAgent {
         state.setCurrentSearchEventId(searchEventId);
         
         AgentAbility agent = AgentAbility.builder()
-                .memory(MessageWindowChatMemory.withMaxMessages(100))
-                .chatModel(modelHandler.getModel(state.getResearchId()))
-                .streamingChatModel(modelHandler.getStreamModel(state.getResearchId()))
+                .memory(new ResearchMemory(100))
+                .chatClient(modelHandler.getChatClient(state.getResearchId()))
                 .build();
             
         plan(state);
@@ -132,14 +132,9 @@ public class SearchAgent {
                 "date", DateUtil.today()
             ));
             
-            ChatRequest chatRequest = ChatRequest.builder()
-                .messages(UserMessage.from(prompt))
-                .build();
-            
-            ChatResponse chatResponse = agent.getChatModel().chat(chatRequest);
-            TokenUsage tokenUsage = chatResponse.tokenUsage();
-            state.setTotalInputTokens(state.getTotalInputTokens() + tokenUsage.inputTokenCount());
-            state.setTotalOutputTokens(state.getTotalOutputTokens() + tokenUsage.outputTokenCount());
+            ResearchChatResponse chatResponse = agent.getChatClient().chat(
+                    ResearchChatRequest.textOnly(List.of(ResearchMessage.user(prompt))));
+            addTokenUsage(state, chatResponse.tokenUsage());
             return objectMapper.readValue(chatResponse.aiMessage().text(), SummarySchema.class);
             
         } catch (Exception e) {
@@ -171,5 +166,10 @@ public class SearchAgent {
         }
         
         return output.toString();
+    }
+
+    private void addTokenUsage(DeepResearchState state, ResearchTokenUsage tokenUsage) {
+        state.setTotalInputTokens(state.getTotalInputTokens() + tokenUsage.inputTokenCount());
+        state.setTotalOutputTokens(state.getTotalOutputTokens() + tokenUsage.outputTokenCount());
     }
 }

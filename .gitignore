@@ -41,6 +41,7 @@ build/
 ### Claude Code ###
 .claude/
 .codex/
+.agents
 
 ### Logs ###
 *.log
