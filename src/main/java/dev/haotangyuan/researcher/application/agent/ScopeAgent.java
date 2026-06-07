@@ -4,6 +4,7 @@ import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchAgentRequest;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatRequest;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatResponse;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchMemory;
@@ -15,6 +16,7 @@ import dev.haotangyuan.researcher.application.schema.ScopeSchema;
 import dev.haotangyuan.researcher.application.state.DeepResearchState;
 import dev.haotangyuan.researcher.application.data.WorkflowStatus;
 import dev.haotangyuan.researcher.infra.util.EventPublisher;
+import dev.haotangyuan.researcher.infra.util.JsonOutputParser;
 import dev.haotangyuan.researcher.infra.util.MemoryUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -66,13 +68,17 @@ public class ScopeAgent {
                 "date", DateUtil.today()
             ))
         );
-        ResearchChatResponse chatResponse = agent.getChatClient().chat(
-                ResearchChatRequest.textOnly(List.of(userMessage)));
+        ResearchChatResponse chatResponse = agent.getChatClient().runAgent(
+                ResearchAgentRequest.textOnly(
+                        "ScopeAgent",
+                        "",
+                        List.of(userMessage),
+                        state.traceContext()));
         addTokenUsage(state, chatResponse.tokenUsage());
         String jsonResponse = chatResponse.aiMessage().text();
         try {
             ScopeSchema.ClarifyWithUserSchema clarifyResult = objectMapper.readValue(
-                    jsonResponse, ScopeSchema.ClarifyWithUserSchema.class);
+                    JsonOutputParser.extractObject(jsonResponse), ScopeSchema.ClarifyWithUserSchema.class);
             if (clarifyResult.needClarification()) {
                 agent.getMemory().add(ResearchMessage.assistant(clarifyResult.question()));
                 state.setStatus(WorkflowStatus.NEED_CLARIFICATION);
@@ -99,13 +105,17 @@ public class ScopeAgent {
                     "messages", messages,
                     "date", DateUtil.today()
                 )));
-        ResearchChatResponse chatResponse = agent.getChatClient().chat(
-                ResearchChatRequest.textOnly(List.of(userMessage)));
+        ResearchChatResponse chatResponse = agent.getChatClient().runAgent(
+                ResearchAgentRequest.textOnly(
+                        "ScopeAgent",
+                        "",
+                        List.of(userMessage),
+                        state.traceContext()));
         addTokenUsage(state, chatResponse.tokenUsage());
         String jsonResponse = chatResponse.aiMessage().text();
         try {
             ScopeSchema.ResearchQuestion researchQuestion = objectMapper.readValue(
-                    jsonResponse, ScopeSchema.ResearchQuestion.class);
+                    JsonOutputParser.extractObject(jsonResponse), ScopeSchema.ResearchQuestion.class);
             agent.getMemory().add(ResearchMessage.assistant(researchQuestion.researchBrief()));
             eventPublisher.publishEvent(state.getResearchId(), EventType.SCOPE,
                     "已制定研究计划", researchQuestion.researchBrief(), state.getCurrentScopeEventId());

@@ -9,6 +9,7 @@ import dev.haotangyuan.researcher.application.data.WorkflowStatus;
 import dev.haotangyuan.researcher.application.state.DeepResearchState;
 import dev.haotangyuan.researcher.domain.mapper.ResearchSessionMapper;
 import dev.haotangyuan.researcher.infra.exception.WorkflowException;
+import dev.haotangyuan.researcher.infra.observability.ResearchObservation;
 import dev.haotangyuan.researcher.infra.sse.SseHub;
 import dev.haotangyuan.researcher.infra.util.EventPublisher;
 import dev.haotangyuan.researcher.infra.util.SequenceUtil;
@@ -33,16 +34,18 @@ public class AgentPipeline {
     private final ResearchSessionMapper researchSessionMapper;
     private final EventPublisher eventPublisher;
     private final ModelHandler modelHandler;
+    private final ResearchObservation researchObservation;
 
     @QueuedAsync
     public void run(DeepResearchState state) {
         String researchId = state.getResearchId();
+        ResearchObservation.WorkflowScope workflowScope = researchObservation.startWorkflow(state);
         try {
             state.setStatus(WorkflowStatus.START);
             updateResearchSession(researchId, WorkflowStatus.START, state);
 
             // Phase 1: Scope - 确定研究范围和问题
-            scopeAgent.run(state);
+            researchObservation.observeStage("ScopeAgent", state, () -> scopeAgent.run(state));
 
             String status = state.getStatus();
             if (WorkflowStatus.FAILED.equals(status)) {
@@ -65,7 +68,7 @@ public class AgentPipeline {
             }
 
             // Phase 2: Supervisor - 执行研究并收集信息
-            supervisorAgent.run(state);
+            researchObservation.observeStage("SupervisorAgent", state, () -> supervisorAgent.run(state));
 
             status = state.getStatus();
             if (WorkflowStatus.FAILED.equals(status)) {
@@ -83,7 +86,7 @@ public class AgentPipeline {
             }
 
             // Phase 3: Report - 生成最终报告
-            reportAgent.run(state);
+            researchObservation.observeStage("ReportAgent", state, () -> reportAgent.run(state));
 
             status = state.getStatus();
             if (WorkflowStatus.FAILED.equals(status)) {
@@ -116,9 +119,15 @@ public class AgentPipeline {
             updateResearchSession(researchId, WorkflowStatus.FAILED, state);
             log.error("Unexpected error for researchId={}", researchId, e);
         } finally {
-            sequenceUtil.reset(researchId);
-            sseHub.complete(researchId, state.getStatus());
-            modelHandler.removeModel(researchId);
+            workflowScope.complete(state);
+            workflowScope.close();
+            try {
+                sequenceUtil.reset(researchId);
+                sseHub.complete(researchId, state.getStatus());
+                modelHandler.removeModel(researchId);
+            } catch (Exception cleanupError) {
+                log.warn("Failed to clean up workflow resources for researchId={}", researchId, cleanupError);
+            }
         }
     }
 

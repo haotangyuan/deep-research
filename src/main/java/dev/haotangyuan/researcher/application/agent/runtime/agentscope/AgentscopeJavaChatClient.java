@@ -1,30 +1,30 @@
 package dev.haotangyuan.researcher.application.agent.runtime.agentscope;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchAgentRequest;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatClient;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatRequest;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatResponse;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchMessage;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchTokenUsage;
-import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolCall;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolParameter;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolSpec;
 import dev.haotangyuan.researcher.application.agent.runtime.ToolChoiceMode;
-import io.agentscope.core.message.ContentBlock;
+import dev.haotangyuan.researcher.infra.observability.ResearchOtelContext;
+import dev.haotangyuan.researcher.infra.observability.ResearchObservation;
+import io.agentscope.core.ReActAgent;
+import io.agentscope.core.agent.RuntimeContext;
 import io.agentscope.core.message.Msg;
-import io.agentscope.core.message.MsgRole;
-import io.agentscope.core.message.TextBlock;
-import io.agentscope.core.message.ToolResultBlock;
-import io.agentscope.core.message.ToolUseBlock;
 import io.agentscope.core.model.ChatResponse;
 import io.agentscope.core.model.ChatUsage;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.Model;
 import io.agentscope.core.model.ToolChoice;
 import io.agentscope.core.model.ToolSchema;
+import io.agentscope.core.tool.Toolkit;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import lombok.extern.slf4j.Slf4j;
+import reactor.core.publisher.Flux;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -34,20 +34,82 @@ import java.util.Map;
 
 @Slf4j
 public class AgentscopeJavaChatClient implements ResearchChatClient {
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
-    private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
-    };
-
     private final Model model;
     private final Duration timeout;
+    private final ResearchObservation researchObservation;
+    private final AgentscopeStageAgentFactory agentFactory;
+    private final AgentscopeToolkitAdapter toolkitAdapter;
 
-    public AgentscopeJavaChatClient(Model model, Duration timeout) {
+    public AgentscopeJavaChatClient(Model model, Duration timeout, ResearchObservation researchObservation) {
         this.model = model;
         this.timeout = timeout;
+        this.researchObservation = researchObservation;
+        this.agentFactory = new AgentscopeStageAgentFactory();
+        this.toolkitAdapter = new AgentscopeToolkitAdapter();
     }
 
     @Override
     public ResearchChatResponse chat(ResearchChatRequest request) {
+        return researchObservation.observeModelCall(
+                model.getModelName(),
+                "agentscope-java",
+                request,
+                () -> doChat(request));
+    }
+
+    @Override
+    public ResearchChatResponse runAgent(ResearchAgentRequest request) {
+        Context callerContext = ResearchOtelContext.current();
+        UsageCollectingModel usageCollectingModel = new UsageCollectingModel(model);
+        Toolkit toolkit = toolkitAdapter.toToolkit(request.toolSpecifications().stream()
+                .map(spec -> new AgentscopeToolBinding(
+                        spec,
+                        request.toolExecutor(),
+                        request.stageName(),
+                        request.runtimeContext()))
+                .toList());
+        List<ResearchMessage> inputMessages = nonSystemMessages(request.messages());
+        ReActAgent agent = agentFactory.create(new AgentscopeStageAgentDefinition(
+                request.stageName(),
+                mergedSystemPrompt(request),
+                usageCollectingModel,
+                toolkit,
+                List.of(new FixedOtelTracingMiddleware(), new AgentscopeTraceContextMiddleware()),
+                request.maxIterations(),
+                agentTimeout(request)));
+        try {
+            try (Scope ignored = ResearchOtelContext.makeCurrent(callerContext)) {
+                agent.streamEvents(
+                                AgentscopeMessageConverter.toAgentscopeMessages(inputMessages),
+                                toRuntimeContext(request))
+                        .collectList()
+                        .block(agentTimeout(request));
+            }
+        } finally {
+            ResearchOtelContext.restore(callerContext);
+        }
+        Msg reply = lastAssistantMessage(agent);
+        if (reply == null) {
+            return new ResearchChatResponse(ResearchMessage.assistant(""), ResearchTokenUsage.zero(), null);
+        }
+        return new ResearchChatResponse(
+                AgentscopeMessageConverter.toResearchMessage(reply),
+                usageCollectingModel.usage(),
+                null);
+    }
+
+    private static Msg lastAssistantMessage(ReActAgent agent) {
+        List<Msg> context = agent.getAgentState().getContext();
+        for (int i = context.size() - 1; i >= 0; i--) {
+            Msg msg = context.get(i);
+            if (msg.getRole() == io.agentscope.core.message.MsgRole.ASSISTANT) {
+                return msg;
+            }
+        }
+        return null;
+    }
+
+    private ResearchChatResponse doChat(ResearchChatRequest request) {
         ChatResponse response = model.stream(
                         toAgentscopeMessages(request.messages()),
                         toAgentscopeToolSpecs(request.toolSpecifications()),
@@ -62,12 +124,49 @@ public class AgentscopeJavaChatClient implements ResearchChatClient {
         return toResearchResponse(response, model.getModelName());
     }
 
-    public static List<Msg> toAgentscopeMessages(List<ResearchMessage> messages) {
-        List<Msg> converted = new ArrayList<>();
-        for (ResearchMessage message : messages) {
-            converted.add(toAgentscopeMessage(message));
+    private static RuntimeContext toRuntimeContext(ResearchAgentRequest request) {
+        RuntimeContext context = RuntimeContext.builder()
+                .sessionId(stringContext(request, "research.id"))
+                .userId(stringContext(request, "user.id"))
+                .build();
+        request.runtimeContext().forEach(context::put);
+        return context;
+    }
+
+    private static String mergedSystemPrompt(ResearchAgentRequest request) {
+        List<String> prompts = new ArrayList<>();
+        if (request.systemPrompt() != null && !request.systemPrompt().isBlank()) {
+            prompts.add(request.systemPrompt());
         }
-        return converted;
+        request.messages().stream()
+                .filter(message -> message.role() == ResearchMessage.Role.SYSTEM)
+                .map(ResearchMessage::text)
+                .filter(text -> text != null && !text.isBlank())
+                .forEach(prompts::add);
+        return String.join("\n\n", prompts);
+    }
+
+    private static List<ResearchMessage> nonSystemMessages(List<ResearchMessage> messages) {
+        return messages.stream()
+                .filter(message -> message.role() != ResearchMessage.Role.SYSTEM)
+                .toList();
+    }
+
+    private static String stringContext(ResearchAgentRequest request, String key) {
+        Object value = request.runtimeContext().get(key);
+        return value == null ? null : value.toString();
+    }
+
+    static Duration agentTimeout(Duration modelTimeout, int maxIterations) {
+        return modelTimeout.multipliedBy(Math.max(1, maxIterations));
+    }
+
+    private Duration agentTimeout(ResearchAgentRequest request) {
+        return agentTimeout(timeout, request.maxIterations());
+    }
+
+    public static List<Msg> toAgentscopeMessages(List<ResearchMessage> messages) {
+        return AgentscopeMessageConverter.toAgentscopeMessages(messages);
     }
 
     public static List<ToolSchema> toAgentscopeToolSpecs(List<ResearchToolSpec> specs) {
@@ -86,8 +185,8 @@ public class AgentscopeJavaChatClient implements ResearchChatClient {
 
     public static ResearchChatResponse toResearchResponse(ChatResponse response, String modelName) {
         ResearchMessage message = ResearchMessage.assistant(
-                extractText(response.getContent()),
-                extractToolCalls(response.getContent()));
+                AgentscopeMessageConverter.extractText(response.getContent()),
+                AgentscopeMessageConverter.extractToolCalls(response.getContent()));
         ChatUsage usage = response.getUsage();
         ResearchTokenUsage tokenUsage;
         if (usage == null) {
@@ -97,47 +196,6 @@ public class AgentscopeJavaChatClient implements ResearchChatClient {
             tokenUsage = new ResearchTokenUsage(usage.getInputTokens(), usage.getOutputTokens());
         }
         return new ResearchChatResponse(message, tokenUsage, response.getFinishReason());
-    }
-
-    private static Msg toAgentscopeMessage(ResearchMessage message) {
-        if (message.role() == ResearchMessage.Role.SYSTEM) {
-            return Msg.builder()
-                    .role(MsgRole.SYSTEM)
-                    .textContent(nonNullText(message.text()))
-                    .build();
-        }
-        if (message.role() == ResearchMessage.Role.USER) {
-            return Msg.builder()
-                    .role(MsgRole.USER)
-                    .textContent(nonNullText(message.text()))
-                    .build();
-        }
-        if (message.role() == ResearchMessage.Role.TOOL) {
-            ToolResultBlock result = ToolResultBlock.of(
-                    message.toolCallId(),
-                    message.toolName(),
-                    TextBlock.builder().text(nonNullText(message.text())).build());
-            return Msg.builder()
-                    .role(MsgRole.TOOL)
-                    .content(result)
-                    .build();
-        }
-        List<ContentBlock> content = new ArrayList<>();
-        if (message.text() != null && !message.text().isEmpty()) {
-            content.add(TextBlock.builder().text(message.text()).build());
-        }
-        for (ResearchToolCall toolCall : message.toolCalls()) {
-            content.add(ToolUseBlock.builder()
-                    .id(toolCall.id())
-                    .name(toolCall.name())
-                    .input(parseArguments(toolCall.arguments()))
-                    .content(validJsonObjectOrNull(toolCall.arguments()))
-                    .build());
-        }
-        return Msg.builder()
-                .role(MsgRole.ASSISTANT)
-                .content(content)
-                .build();
     }
 
     private static ToolSchema toAgentscopeToolSpec(ResearchToolSpec spec) {
@@ -186,82 +244,35 @@ public class AgentscopeJavaChatClient implements ResearchChatClient {
         return "string";
     }
 
-    private static List<ResearchToolCall> extractToolCalls(List<ContentBlock> content) {
-        if (content == null) {
-            return List.of();
-        }
-        return content.stream()
-                .filter(ToolUseBlock.class::isInstance)
-                .map(ToolUseBlock.class::cast)
-                .map(toolUse -> new ResearchToolCall(
-                        toolUse.getId(),
-                        toolUse.getName(),
-                        argumentsToJson(toolUse)))
-                .toList();
-    }
+    private static class UsageCollectingModel implements Model {
+        private final Model delegate;
+        private int inputTokens;
+        private int outputTokens;
 
-    private static String argumentsToJson(ToolUseBlock toolUse) {
-        if (toolUse.getContent() != null && isJsonObject(toolUse.getContent())) {
-            return toolUse.getContent();
+        private UsageCollectingModel(Model delegate) {
+            this.delegate = delegate;
         }
-        try {
-            return OBJECT_MAPPER.writeValueAsString(toolUse.getInput());
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to serialize AgentScope tool call arguments for {}", toolUse.getName(), e);
-            return "{}";
-        }
-    }
 
-    private static String extractText(List<ContentBlock> content) {
-        if (content == null || content.isEmpty()) {
-            return "";
+        @Override
+        public Flux<ChatResponse> stream(List<Msg> messages, List<ToolSchema> toolSchemas, GenerateOptions options) {
+            return delegate.stream(messages, toolSchemas, options)
+                    .doOnNext(response -> {
+                        ChatUsage usage = response.getUsage();
+                        if (usage != null) {
+                            inputTokens += usage.getInputTokens();
+                            outputTokens += usage.getOutputTokens();
+                        }
+                    });
         }
-        List<String> parts = new ArrayList<>();
-        for (ContentBlock block : content) {
-            if (block instanceof TextBlock textBlock) {
-                parts.add(textBlock.getText());
-            } else if (block instanceof ToolResultBlock resultBlock) {
-                String resultText = extractText(resultBlock.getOutput());
-                if (!resultText.isEmpty()) {
-                    parts.add(resultText);
-                }
-            }
-        }
-        return String.join("\n", parts);
-    }
 
-    private static Map<String, Object> parseArguments(String arguments) {
-        if (!isJsonObject(arguments)) {
-            return Map.of();
+        @Override
+        public String getModelName() {
+            return delegate.getModelName();
         }
-        try {
-            return OBJECT_MAPPER.readValue(arguments, MAP_TYPE);
-        } catch (JsonProcessingException e) {
-            return Map.of();
+
+        private ResearchTokenUsage usage() {
+            return new ResearchTokenUsage(inputTokens, outputTokens);
         }
     }
 
-    private static String validJsonObjectOrNull(String arguments) {
-        return isJsonObject(arguments) ? arguments : null;
-    }
-
-    private static boolean isJsonObject(String arguments) {
-        if (arguments == null || arguments.isBlank()) {
-            return false;
-        }
-        String trimmed = arguments.trim();
-        if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-            return false;
-        }
-        try {
-            OBJECT_MAPPER.readValue(trimmed, MAP_TYPE);
-            return true;
-        } catch (JsonProcessingException e) {
-            return false;
-        }
-    }
-
-    private static String nonNullText(String text) {
-        return text == null ? "" : text;
-    }
 }

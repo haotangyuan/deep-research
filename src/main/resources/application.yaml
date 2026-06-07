@@ -27,6 +27,20 @@ tavily:
 research:
   agent:
     framework: ${RESEARCH_AGENT_FRAMEWORK:agentscope-java}
+  observability:
+    enabled: ${RESEARCH_OBSERVABILITY_ENABLED:false}
+    provider: ${RESEARCH_OBSERVABILITY_PROVIDER:none}
+    endpoint: ${RESEARCH_OBSERVABILITY_ENDPOINT:}
+    capture-input-output: ${RESEARCH_OBSERVABILITY_CAPTURE_IO:false}
+    input-output-max-chars: ${RESEARCH_OBSERVABILITY_IO_MAX_CHARS:500}
+    langfuse:
+      public-key: ${LANGFUSE_PUBLIC_KEY:}
+      secret-key: ${LANGFUSE_SECRET_KEY:}
+      ingestion-version: ${LANGFUSE_INGESTION_VERSION:4}
+    studio:
+      enabled: ${AGENTSCOPE_STUDIO_ENABLED:false}
+      url: ${AGENTSCOPE_STUDIO_URL:http://localhost:3000}
+      project: ${AGENTSCOPE_STUDIO_PROJECT:DeepResearch}
   async:
     max-pool-size: 10
     queue-capacity: 50
@@ -60,3 +74,6 @@ springdoc:
     title: Deep Research API
     description: 基于多智能体协作的自动化深度研究平台
     version: 1.0.0
+
+llm:
+  timeout: ${LLM_TIMEOUT:300}

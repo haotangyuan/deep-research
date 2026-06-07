@@ -3,6 +3,7 @@ package dev.haotangyuan.researcher.application.agent;
 import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchAgentRequest;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatRequest;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatResponse;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchMemory;
@@ -11,6 +12,7 @@ import dev.haotangyuan.researcher.application.agent.runtime.ResearchTokenUsage;
 import dev.haotangyuan.researcher.infra.data.EventType;
 import dev.haotangyuan.researcher.application.model.ModelHandler;
 import dev.haotangyuan.researcher.infra.util.EventPublisher;
+import dev.haotangyuan.researcher.infra.util.JsonOutputParser;
 import dev.haotangyuan.researcher.application.schema.SummarySchema;
 import dev.haotangyuan.researcher.application.state.DeepResearchState;
 import dev.haotangyuan.researcher.infra.client.TavilyClient;
@@ -132,10 +134,14 @@ public class SearchAgent {
                 "date", DateUtil.today()
             ));
             
-            ResearchChatResponse chatResponse = agent.getChatClient().chat(
-                    ResearchChatRequest.textOnly(List.of(ResearchMessage.user(prompt))));
+            ResearchChatResponse chatResponse = agent.getChatClient().runAgent(
+                    ResearchAgentRequest.textOnly(
+                            "SearchAgent",
+                            "",
+                            List.of(ResearchMessage.user(prompt)),
+                            state.traceContext()));
             addTokenUsage(state, chatResponse.tokenUsage());
-            return objectMapper.readValue(chatResponse.aiMessage().text(), SummarySchema.class);
+            return objectMapper.readValue(JsonOutputParser.extractObject(chatResponse.aiMessage().text()), SummarySchema.class);
             
         } catch (Exception e) {
             log.error("Webpage summarization failed", e);

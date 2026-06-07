@@ -121,3 +121,53 @@ The migration SHALL include automated verification that exercises equivalent wor
 #### Scenario: Optional live model verification
 - **WHEN** live LLM credentials and explicit integration-test flags are provided
 - **THEN** optional integration tests SHALL be able to execute a minimal research workflow through the configured OpenAI-compatible endpoint for each selected runtime.
+
+### Requirement: Agentscope native runtime execution
+The agentscope-java runtime SHALL execute Deep Research workflow stages through AgentScope native Agent and Toolkit abstractions rather than only calling an AgentScope chat model.
+
+#### Scenario: Agentscope runtime selected
+- **WHEN** the application starts with `research.agent.framework=agentscope-java`
+- **THEN** the selected runtime SHALL construct native AgentScope agents and toolkits for workflow execution.
+
+#### Scenario: Langchain4j rollback selected
+- **WHEN** the application starts with `research.agent.framework=langchain4j`
+- **THEN** the application SHALL continue using the langchain4j backup runtime without depending on AgentScope native Agent or Toolkit classes.
+
+#### Scenario: Native types remain inside adapter boundary
+- **WHEN** a workflow runs through the agentscope-java native runtime
+- **THEN** AgentScope message, agent, toolkit, middleware, hook, and tool request types SHALL NOT be stored in domain entities, REST DTOs, SSE payloads, or `DeepResearchState`.
+
+### Requirement: Runtime tool contract parity under native execution
+The agentscope-java native runtime SHALL preserve existing tool contract equivalence.
+
+#### Scenario: Tool names remain compatible
+- **WHEN** a model requests a tool in the native agentscope-java runtime
+- **THEN** the tool names `thinkTool`, `conductResearch`, `researchComplete`, and `tavilySearch` SHALL remain accepted and semantically equivalent to the current workflow.
+
+#### Scenario: Required tool behavior preserved
+- **WHEN** SupervisorAgent or ResearcherAgent asks the native AgentScope agent for the next action
+- **THEN** the selected runtime SHALL preserve required tool-call behavior or an equivalent reminder/reprompt strategy when no tool action is produced.
+
+#### Scenario: Token accounting preserved
+- **WHEN** native AgentScope model calls return usage metadata
+- **THEN** the workflow SHALL continue accumulating input and output token totals in `DeepResearchState` and persist them on session update.
+
+### Requirement: Runtime observability boundary
+The system SHALL integrate Agent observability without breaking runtime framework selection or langchain4j rollback support.
+
+#### Scenario: Agentscope runtime emits native telemetry
+- **WHEN** the application runs with `research.agent.framework=agentscope-java` and observability export is enabled
+- **THEN** the agentscope-java runtime path SHALL use AgentScope Java tracing integration for supported agent, model, tool, and formatting activities.
+
+#### Scenario: Langchain4j runtime remains available
+- **WHEN** the application runs with `research.agent.framework=langchain4j`
+- **THEN** the application SHALL start and execute research workflows without requiring AgentScope Java telemetry classes in the langchain4j adapter path.
+
+#### Scenario: Observability disabled for either runtime
+- **WHEN** observability is disabled
+- **THEN** both `agentscope-java` and `langchain4j` runtime selections SHALL preserve their existing chat, tool-call parsing, token accounting, REST API, and SSE behavior.
+
+#### Scenario: Runtime context attributes are consistent
+- **WHEN** either runtime produces a model call span or workflow span
+- **THEN** runtime-identifying attributes SHALL use the same `agent.framework` values as startup framework selection.
+

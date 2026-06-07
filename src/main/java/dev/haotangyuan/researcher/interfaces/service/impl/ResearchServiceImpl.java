@@ -19,7 +19,9 @@ import dev.haotangyuan.researcher.interfaces.dto.resp.ResearchMessageRespDTO;
 import dev.haotangyuan.researcher.interfaces.dto.resp.ResearchStatusRespDTO;
 import dev.haotangyuan.researcher.interfaces.dto.resp.SendMessageRespDTO;
 import dev.haotangyuan.researcher.infra.config.BudgetProps;
+import dev.haotangyuan.researcher.infra.config.AgentRuntimeProps;
 import dev.haotangyuan.researcher.infra.data.TimelineItem;
+import dev.haotangyuan.researcher.infra.observability.ResearchTraceMetadata;
 import dev.haotangyuan.researcher.infra.util.CacheUtil;
 import dev.haotangyuan.researcher.infra.util.ResearchMessageConverter;
 import dev.haotangyuan.researcher.interfaces.service.ResearchService;
@@ -47,6 +49,7 @@ public class ResearchServiceImpl implements ResearchService {
     private final ModelHandler modelHandler;
     private final BudgetProps budgetConfig;
     private final ModelService modelService;
+    private final AgentRuntimeProps agentRuntimeProps;
 
     @Override
     public CreateResearchRespDTO createResearch(Long userId, Integer num) {
@@ -224,6 +227,12 @@ public class ResearchServiceImpl implements ResearchService {
                 .researchId(researchId)
                 .chatHistory(chatHistory)
                 .status(WorkflowStatus.QUEUE)
+                .traceMetadata(new ResearchTraceMetadata(
+                        researchId,
+                        userId,
+                        modelId,
+                        budget,
+                        agentRuntimeProps.framework().propertyValue()))
                 // Budget 配置
                 .budget(budgetLevel)
                 // Supervisor 阶段

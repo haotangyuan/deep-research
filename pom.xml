@@ -30,6 +30,7 @@
         <java.version>21</java.version>
         <langchain4j.version>1.8.0</langchain4j.version>
         <agentscope.version>2.0.0-RC1</agentscope.version>
+        <opentelemetry.version>1.31.0</opentelemetry.version>
         <hutool.version>5.8.32</hutool.version>
         <okhttp.version>4.12.0</okhttp.version>
         <mybatis-plus.version>3.5.9</mybatis-plus.version>
@@ -80,6 +81,16 @@
             <groupId>io.agentscope</groupId>
             <artifactId>agentscope-core</artifactId>
             <version>${agentscope.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk</artifactId>
+            <version>${opentelemetry.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+            <version>${opentelemetry.version}</version>
         </dependency>
 
         <dependency>

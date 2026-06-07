@@ -4,6 +4,7 @@ import org.springframework.stereotype.Component;
 
 import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.StrUtil;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchAgentRequest;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatRequest;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatResponse;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchMemory;
@@ -52,8 +53,12 @@ public class ReportAgent {
     }
 
     public void action(AgentAbility agent, DeepResearchState state) {
-        ResearchChatResponse chatResponse = agent.getChatClient().chat(
-                ResearchChatRequest.textOnly(agent.getMemory().messages()));
+        ResearchChatResponse chatResponse = agent.getChatClient().runAgent(
+                ResearchAgentRequest.textOnly(
+                        "ReportAgent",
+                        "",
+                        agent.getMemory().messages(),
+                        state.traceContext()));
         addTokenUsage(state, chatResponse.tokenUsage());
         agent.getMemory().add(chatResponse.aiMessage());
         state.setReport(chatResponse.aiMessage().text());

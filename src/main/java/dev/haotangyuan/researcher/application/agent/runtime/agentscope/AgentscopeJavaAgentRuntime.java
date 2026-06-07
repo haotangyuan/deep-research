@@ -5,6 +5,7 @@ import dev.haotangyuan.researcher.application.agent.runtime.AgentRuntime;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatClient;
 import dev.haotangyuan.researcher.domain.entity.Model;
 import dev.haotangyuan.researcher.infra.exception.ResearchException;
+import dev.haotangyuan.researcher.infra.observability.ResearchObservation;
 import io.agentscope.core.model.ExecutionConfig;
 import io.agentscope.core.model.GenerateOptions;
 import io.agentscope.core.model.OpenAIChatModel;
@@ -18,9 +19,13 @@ import java.time.Duration;
 @ConditionalOnProperty(name = "research.agent.framework", havingValue = "agentscope-java", matchIfMissing = true)
 public class AgentscopeJavaAgentRuntime implements AgentRuntime {
     private final int timeout;
+    private final ResearchObservation researchObservation;
 
-    public AgentscopeJavaAgentRuntime(@Value("${llm.timeout:120}") int timeout) {
+    public AgentscopeJavaAgentRuntime(
+            @Value("${llm.timeout:120}") int timeout,
+            ResearchObservation researchObservation) {
         this.timeout = timeout;
+        this.researchObservation = researchObservation;
     }
 
     @Override
@@ -40,12 +45,13 @@ public class AgentscopeJavaAgentRuntime implements AgentRuntime {
                 .modelName(model.getModel())
                 .stream(false)
                 .generateOptions(GenerateOptions.builder()
+                        .maxTokens(16384)
                         .executionConfig(ExecutionConfig.builder()
                                 .timeout(duration)
                                 .maxAttempts(1)
                                 .build())
                         .build())
                 .build();
-        return new AgentscopeJavaChatClient(chatModel, duration.plusSeconds(5));
+        return new AgentscopeJavaChatClient(chatModel, duration.plusSeconds(5), researchObservation);
     }
 }
