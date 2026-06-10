@@ -66,6 +66,7 @@ public class AgentPipeline {
                 updateResearchSession(researchId, WorkflowStatus.FAILED, state);
                 return;
             }
+            updateResearchSession(researchId, WorkflowStatus.IN_SCOPE, state);
 
             // Phase 2: Supervisor - 执行研究并收集信息
             researchObservation.observeStage("SupervisorAgent", state, () -> supervisorAgent.run(state));
@@ -84,6 +85,7 @@ public class AgentPipeline {
                 updateResearchSession(researchId, WorkflowStatus.FAILED, state);
                 return;
             }
+            updateResearchSession(researchId, WorkflowStatus.IN_RESEARCH, state);
 
             // Phase 3: Report - 生成最终报告
             researchObservation.observeStage("ReportAgent", state, () -> reportAgent.run(state));

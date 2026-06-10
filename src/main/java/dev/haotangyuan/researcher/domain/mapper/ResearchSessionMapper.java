@@ -23,8 +23,8 @@ public interface ResearchSessionMapper extends BaseMapper<ResearchSession> {
                 update_time = NOW()
                 <if test="setStartTime">, start_time = NOW()</if>
                 <if test="setCompleteTime">, complete_time = NOW()</if>
-                , total_input_tokens = COALESCE(total_input_tokens, 0) + #{inputTokens}
-                , total_output_tokens = COALESCE(total_output_tokens, 0) + #{outputTokens}
+                , total_input_tokens = #{inputTokens}
+                , total_output_tokens = #{outputTokens}
             WHERE id = #{id}
             </script>
             """)

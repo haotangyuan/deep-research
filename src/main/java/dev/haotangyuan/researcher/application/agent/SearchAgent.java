@@ -97,32 +97,30 @@ public class SearchAgent {
             if (content != null && content.length() > 500) {
                 try {
                     SummarySchema summary = summarizeWebpage(agent, state, content);
+                    Map<String, String> params = new HashMap<>();
+                    params.put("title", result.title());
+                    params.put("url", result.url());
+                    params.put("summary", summary.getSummary() != null ? summary.getSummary() : "");
+                    params.put("key_excerpts", summary.getKeyExcerpts() != null ? summary.getKeyExcerpts() : "");
                     String formatted = StrUtil.format(
                         "[{title}]\nURL: {url}\n<summary>{summary}</summary>\n<key_excerpts>{key_excerpts}</key_excerpts>",
-                        Map.of(
-                            "title", result.title(),
-                            "url", result.url(),
-                            "summary", summary.getSummary(),
-                            "key_excerpts", summary.getKeyExcerpts()
-                        )
+                        params
                     );
                     state.getSearchNotes().add(formatted);
                 } catch (Exception e) {
-                    log.warn("Failed to summarize {}", result.url());
-                    state.getSearchNotes().add(StrUtil.format("[{title}]\nURL: {url}\n{content}",
-                        Map.of(
-                            "title", result.title(),
-                            "url", result.url(),
-                            "content", result.content()
-                        )));
+                    log.warn("Failed to summarize {}: {}", result.url(), e.getMessage());
+                    Map<String, String> params = new HashMap<>();
+                    params.put("title", result.title());
+                    params.put("url", result.url());
+                    params.put("content", result.content() != null ? result.content() : "");
+                    state.getSearchNotes().add(StrUtil.format("[{title}]\nURL: {url}\n{content}", params));
                 }
             } else {
-                state.getSearchNotes().add(StrUtil.format("[{title}]\nURL: {url}\n{content}",
-                    Map.of(
-                        "title", result.title(),
-                        "url", result.url(),
-                        "content", content
-                    )));
+                Map<String, String> params = new HashMap<>();
+                params.put("title", result.title());
+                params.put("url", result.url());
+                params.put("content", content != null ? content : "");
+                state.getSearchNotes().add(StrUtil.format("[{title}]\nURL: {url}\n{content}", params));
             }
         }
     }
