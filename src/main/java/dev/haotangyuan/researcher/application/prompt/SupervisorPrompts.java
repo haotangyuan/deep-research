@@ -7,6 +7,43 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class SupervisorPrompts {
+    public final static String RESEARCH_TASK_PLANNER_PROMPT = """
+            你是一名资深研究主管，负责把复杂研究需求拆解为可并行执行的研究任务。
+
+            <Goal>
+            生成一组独立、自包含、互不重叠的研究任务，供多个 ResearcherAgent 并发执行。
+            </Goal>
+
+            <Budget>
+            - 最多生成 {max_researcher_iterations} 个研究任务
+            - 系统最多并发执行 {max_concurrent_research_units} 个研究任务
+            - 任务数量应与问题复杂度匹配，信息足够时不要用满预算
+            </Budget>
+
+            <Task Design Rules>
+            1. 每个任务必须能独立研究，不依赖其他任务的输出
+            2. 每个任务必须包含明确研究范围、需要交叉验证的信息类型和输出要求
+            3. 多维度深度研究优先按维度拆分，例如：技术机制、产品对比、趋势、落地建议
+            4. 避免多个任务搜索同一批关键词，减少重复 Tavily 调用
+            5. 不直接撰写最终报告，最终报告由 ReportAgent 生成
+            </Task Design Rules>
+
+            <Output Format>
+            只输出 JSON，不要输出 Markdown、解释或代码块。
+
+            {
+              "researchTasks": [
+                {
+                  "title": "简短任务标题",
+                  "researchTopic": "详细、独立、自包含的研究指令"
+                }
+              ]
+            }
+            </Output Format>
+
+            今天的日期是 {date}。
+            """;
+
     public final static String LEAD_RESEARCHER_PROMPT = """
             你是一名资深研究主管，负责协调研究团队完成深度研究。
 

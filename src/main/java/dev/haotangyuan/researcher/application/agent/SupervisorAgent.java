@@ -1,34 +1,38 @@
 package dev.haotangyuan.researcher.application.agent;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import cn.hutool.core.date.DateUtil;
 import cn.hutool.core.util.StrUtil;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchAgentRequest;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchMemory;
-import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatRequest;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatResponse;
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchMessage;
-import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolCall;
-import dev.haotangyuan.researcher.application.agent.runtime.ResearchToolSpec;
-import dev.haotangyuan.researcher.application.agent.runtime.ToolChoiceMode;
 import dev.haotangyuan.researcher.application.data.WorkflowStatus;
 import dev.haotangyuan.researcher.application.model.ModelHandler;
 import dev.haotangyuan.researcher.application.state.DeepResearchState;
-import dev.haotangyuan.researcher.application.tool.ToolRegistry;
-import dev.haotangyuan.researcher.application.tool.annotation.SupervisorTool;
 import dev.haotangyuan.researcher.infra.data.EventType;
 import dev.haotangyuan.researcher.infra.exception.WorkflowException;
+import dev.haotangyuan.researcher.infra.observability.ResearchOtelContext;
 import dev.haotangyuan.researcher.infra.observability.ResearchObservation;
 import dev.haotangyuan.researcher.infra.util.EventPublisher;
+import dev.haotangyuan.researcher.infra.util.JsonOutputParser;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
-import static dev.haotangyuan.researcher.application.prompt.SupervisorPrompts.LEAD_RESEARCHER_PROMPT;
+import static dev.haotangyuan.researcher.application.prompt.SupervisorPrompts.RESEARCH_TASK_PLANNER_PROMPT;
 
 /**
  * @author: haotangyuan
@@ -39,12 +43,10 @@ import static dev.haotangyuan.researcher.application.prompt.SupervisorPrompts.LE
 public class SupervisorAgent {
     private final ModelHandler modelHandler;
     private final ObjectMapper objectMapper;
-    private final ToolRegistry toolRegistry;
     private final ResearcherAgent researcherAgent;
     private final EventPublisher eventPublisher;
     private final ResearchObservation researchObservation;
 
-    private static final String SUPERVISOR_STAGE = SupervisorTool.class.getSimpleName();
     public void run(DeepResearchState state) {
         state.setStatus(WorkflowStatus.IN_RESEARCH);
         Long supervisorEventId = eventPublisher.publishEvent(state.getResearchId(),
@@ -54,88 +56,187 @@ public class SupervisorAgent {
                 .memory(new ResearchMemory(100))
                 .chatClient(modelHandler.getChatClient(state.getResearchId()))
                 .build();
+        List<ResearchTask> tasks = planResearchTasks(agent, state);
+        List<ResearchResult> results = executeResearchTasks(tasks, state);
+        summarizeSupervisorResults(results, state);
+    }
+
+    private List<ResearchTask> planResearchTasks(AgentAbility agent, DeepResearchState state) {
         ResearchMessage systemMessage = ResearchMessage.system(
-                StrUtil.format(LEAD_RESEARCHER_PROMPT, Map.of(
+                StrUtil.format(RESEARCH_TASK_PLANNER_PROMPT, Map.of(
                         "date", DateUtil.today(),
                         "max_concurrent_research_units", state.getBudget().getMaxConcurrentUnits(),
                         "max_researcher_iterations", state.getBudget().getMaxConductCount()
                 )));
-        agent.getMemory().add(systemMessage);
-        agent.getMemory().add(ResearchMessage.user(state.getResearchBrief()));
-        plan(agent, state);
-    }
-
-    private void plan(AgentAbility agent, DeepResearchState state) {
-        int maxConductCount = state.getBudget().getMaxConductCount();
-        int maxIterations = maxConductCount * 2;
-        List<ResearchToolSpec> toolSpecifications = toolRegistry.getToolSpecifications(SUPERVISOR_STAGE);
-        ResearchChatResponse response = agent.getChatClient().runAgent(new ResearchAgentRequest(
+        List<ResearchMessage> messages = List.of(systemMessage, ResearchMessage.user(state.getResearchBrief()));
+        ResearchChatResponse response = agent.getChatClient().runAgent(ResearchAgentRequest.textOnly(
                 "SupervisorAgent",
                 null,
-                agent.getMemory().messages(),
-                toolSpecifications,
-                toolCall -> executeTool(toolCall, state),
-                maxIterations,
+                messages,
                 state.traceContext()));
-        state.setTotalInputTokens(state.getTotalInputTokens() + response.tokenUsage().inputTokenCount());
-        state.setTotalOutputTokens(state.getTotalOutputTokens() + response.tokenUsage().outputTokenCount());
+        state.addTokenUsage(response.tokenUsage());
         agent.getMemory().add(response.aiMessage());
+        List<ResearchTask> tasks = parseResearchTasks(response.aiMessage().text(), state);
+        eventPublisher.publishEvent(state.getResearchId(), EventType.SUPERVISOR,
+                "已拆解研究任务", formatTaskList(tasks), state.getCurrentSupervisorEventId());
+        state.getSupervisorNotes().add("## 研究任务拆解\n\n" + formatTaskList(tasks));
+        return tasks;
     }
 
-    private String executeTool(ResearchToolCall toolExecutionRequest, DeepResearchState state) {
-        String result;
-        if ("conductResearch".equals(toolExecutionRequest.name())) {
-            int maxConductCount = state.getBudget().getMaxConductCount();
-            if (state.getConductCount() >= maxConductCount) {
-                log.warn("conductResearch count limit reached: {}/{}",
-                        state.getConductCount(), maxConductCount);
-                result = researchObservation.observeTool(toolExecutionRequest.name(), "SupervisorAgent", state,
-                        () -> "已达到研究任务配额限制，请调用 researchComplete 完成研究");
-            } else {
-                result = executeConductResearch(toolExecutionRequest, state);
-                state.setConductCount(state.getConductCount() + 1);
-            }
-        } else {
-            var executor = toolRegistry.getExecutor(toolExecutionRequest.name());
-            if (executor == null) {
-                log.warn("No executor found for tool {} in stage {}", toolExecutionRequest.name(), SUPERVISOR_STAGE);
-                return "";
-            }
-            result = researchObservation.observeTool(toolExecutionRequest.name(), "SupervisorAgent", state,
-                    () -> executor.execute(toolExecutionRequest));
-        }
-
-        if (toolExecutionRequest.name().equals("thinkTool")) {
-            eventPublisher.publishEvent(state.getResearchId(), EventType.SUPERVISOR,
-                    "思考中...", result, state.getCurrentSupervisorEventId());
-            state.getSupervisorNotes().add(result);
-        } else if (toolExecutionRequest.name().equals("conductResearch")) {
-            state.getSupervisorNotes().add(result);
-        }
-        state.setSupervisorIterations(state.getSupervisorIterations() + 1);
-        return result;
-    }
-
-    private String executeConductResearch(ResearchToolCall toolExecutionRequest, DeepResearchState state) {
-        String researchTopic;
+    private List<ResearchTask> parseResearchTasks(String responseText, DeepResearchState state) {
+        int maxConductCount = Math.max(1, state.getBudget().getMaxConductCount());
         try {
-            var argsNode = objectMapper.readTree(toolExecutionRequest.arguments());
-            researchTopic = argsNode.get("researchTopic").asText();
+            JsonNode root = objectMapper.readTree(JsonOutputParser.extractObject(responseText));
+            JsonNode taskNodes = root.get("researchTasks");
+            if (taskNodes == null || !taskNodes.isArray()) {
+                return fallbackResearchTasks(state);
+            }
+            List<ResearchTask> tasks = new ArrayList<>();
+            for (JsonNode taskNode : taskNodes) {
+                if (tasks.size() >= maxConductCount) {
+                    break;
+                }
+                String title = textValue(taskNode, "title");
+                String researchTopic = textValue(taskNode, "researchTopic");
+                if (researchTopic.isBlank()) {
+                    continue;
+                }
+                if (title.isBlank()) {
+                    title = "研究任务 " + (tasks.size() + 1);
+                }
+                tasks.add(new ResearchTask(tasks.size(), title, researchTopic));
+            }
+            if (tasks.isEmpty()) {
+                return fallbackResearchTasks(state);
+            }
+            return tasks;
         } catch (Exception e) {
-            log.error("Failed to parse conductResearch arguments", e);
-            throw new WorkflowException("Failed to parse conductResearch arguments", e);
+            log.warn("Failed to parse supervisor research tasks, fallback to single task: {}", e.getMessage());
+            return fallbackResearchTasks(state);
+        }
+    }
+
+    private List<ResearchTask> fallbackResearchTasks(DeepResearchState state) {
+        return List.of(new ResearchTask(0, "综合研究", state.getResearchBrief()));
+    }
+
+    private List<ResearchResult> executeResearchTasks(List<ResearchTask> tasks, DeepResearchState state) {
+        int parallelism = Math.max(1, Math.min(tasks.size(), state.getBudget().getMaxConcurrentUnits()));
+        ExecutorService executor = Executors.newFixedThreadPool(parallelism);
+        Context parentContext = ResearchOtelContext.current();
+        try {
+            List<CompletableFuture<ResearchResult>> futures = tasks.stream()
+                    .map(task -> CompletableFuture.supplyAsync(
+                            () -> withOtelContext(parentContext, () -> executeResearchTask(task, state)),
+                            executor))
+                    .toList();
+            CompletableFuture.allOf(futures.toArray(CompletableFuture[]::new)).join();
+            return futures.stream()
+                    .map(CompletableFuture::join)
+                    .sorted(Comparator.comparingInt(ResearchResult::index))
+                    .toList();
+        } catch (CompletionException e) {
+            Throwable cause = e.getCause() == null ? e : e.getCause();
+            if (cause instanceof WorkflowException workflowException) {
+                throw workflowException;
+            }
+            throw new WorkflowException("Parallel research execution failed", cause);
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private ResearchResult executeResearchTask(ResearchTask task, DeepResearchState state) {
+        if (!reserveConductSlot(state)) {
+            log.warn("conductResearch count limit reached: {}/{}",
+                    state.getConductCount(), state.getBudget().getMaxConductCount());
+            return new ResearchResult(task.index(), task.title(), task.researchTopic(), "已达到研究任务配额限制", null);
         }
 
         Long planEventId = eventPublisher.publishEvent(state.getResearchId(), EventType.SUPERVISOR,
-                "正在研究: " + researchTopic, null, state.getCurrentSupervisorEventId());
-        state.setCurrentResearchEventId(planEventId);
+                "正在研究: " + task.title(), task.researchTopic(), state.getCurrentSupervisorEventId());
+        DeepResearchState branchState = state.forkForResearch(task.researchTopic(), planEventId);
 
-        state.setResearchTopic(researchTopic);
-        state.setResearcherIterations(0);
-        state.setSearchCount(0);
-        state.setResearcherNotes(new ArrayList<>());
+        String result = researchObservation.observeManualTool("conductResearch", "SupervisorAgent", state,
+                () -> researcherAgent.run(branchState));
+        return new ResearchResult(task.index(), task.title(), task.researchTopic(), result, branchState);
+    }
 
-        return researchObservation.observeTool(toolExecutionRequest.name(), "SupervisorAgent", state,
-                () -> researcherAgent.run(state));
+    private void summarizeSupervisorResults(List<ResearchResult> results, DeepResearchState state) {
+        for (ResearchResult result : results) {
+            if (result.branchState() != null) {
+                state.mergeTokenUsageFrom(result.branchState());
+            }
+            state.getSupervisorNotes().add(formatResearchResult(result));
+        }
+        state.setSupervisorIterations(state.getSupervisorIterations() + results.size() + 1);
+        eventPublisher.publishEvent(state.getResearchId(), EventType.SUPERVISOR,
+                "研究资料收集完成", "共完成 " + results.size() + " 个研究任务，准备生成最终报告",
+                state.getCurrentSupervisorEventId());
+    }
+
+    private boolean reserveConductSlot(DeepResearchState state) {
+        synchronized (state) {
+            int current = state.getConductCount() == null ? 0 : state.getConductCount();
+            if (current >= state.getBudget().getMaxConductCount()) {
+                return false;
+            }
+            state.setConductCount(current + 1);
+            return true;
+        }
+    }
+
+    private ResearchResult withOtelContext(Context context, java.util.function.Supplier<ResearchResult> supplier) {
+        try (Scope ignored = ResearchOtelContext.makeCurrent(context)) {
+            return supplier.get();
+        } finally {
+            ResearchOtelContext.restore(context);
+        }
+    }
+
+    private String formatTaskList(List<ResearchTask> tasks) {
+        StringBuilder builder = new StringBuilder();
+        for (ResearchTask task : tasks) {
+            builder.append(task.index() + 1)
+                    .append(". ")
+                    .append(task.title())
+                    .append("\n")
+                    .append(task.researchTopic())
+                    .append("\n\n");
+        }
+        return builder.toString().trim();
+    }
+
+    private String formatResearchResult(ResearchResult result) {
+        return StrUtil.format("""
+                ## {title}
+
+                <research_topic>
+                {topic}
+                </research_topic>
+
+                <research_findings>
+                {findings}
+                </research_findings>
+                """, Map.of(
+                "title", result.title(),
+                "topic", result.researchTopic(),
+                "findings", result.findings() == null ? "" : result.findings()));
+    }
+
+    private static String textValue(JsonNode node, String fieldName) {
+        JsonNode value = node.get(fieldName);
+        return value == null || value.isNull() ? "" : value.asText("").trim();
+    }
+
+    private record ResearchTask(int index, String title, String researchTopic) {
+    }
+
+    private record ResearchResult(
+            int index,
+            String title,
+            String researchTopic,
+            String findings,
+            DeepResearchState branchState) {
     }
 }

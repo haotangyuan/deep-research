@@ -129,7 +129,6 @@ public class ScopeAgent {
     }
 
     private void addTokenUsage(DeepResearchState state, ResearchTokenUsage tokenUsage) {
-        state.setTotalInputTokens(state.getTotalInputTokens() + tokenUsage.inputTokenCount());
-        state.setTotalOutputTokens(state.getTotalOutputTokens() + tokenUsage.outputTokenCount());
+        state.addTokenUsage(tokenUsage);
     }
 }

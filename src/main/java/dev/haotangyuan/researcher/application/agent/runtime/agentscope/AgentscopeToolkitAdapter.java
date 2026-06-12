@@ -17,6 +17,7 @@ import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Context;
 import io.opentelemetry.context.Scope;
 import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -90,7 +91,7 @@ class AgentscopeToolkitAdapter {
                     span.end();
                     ResearchOtelContext.restore(parentContext);
                 }
-            }));
+            }).subscribeOn(Schedulers.boundedElastic()));
         }
     }
 

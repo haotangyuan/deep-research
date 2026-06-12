@@ -10,7 +10,7 @@ Deep Research 整合 LLM 推理、Web 搜索与报告生成，实现从选题澄
 
 ## 核心架构
 
-Deep Research 采用 Spring Boot 后端 + React 前端 + 多 Agent Pipeline 的分层架构。前端通过 REST API 发起研究任务，通过 SSE 订阅长任务进度；后端用有界异步队列承接请求，并在 Agent Pipeline 内完成范围澄清、分工研究、搜索压缩和报告生成。
+Deep Research 采用 Spring Boot 后端 + React 前端 + 多 Agent Pipeline 的分层架构。前端通过 REST API 发起研究任务，通过 SSE 订阅长任务进度；后端用有界异步队列承接请求，并在 Agent Pipeline 内完成范围澄清、并发分工研究、搜索压缩和报告生成。
 
 ```mermaid
 flowchart TB
@@ -97,12 +97,28 @@ flowchart LR
     Scope -->|"需要澄清"| Clarify["返回澄清问题<br/>等待用户补充"]:::output
     Scope -->|"需求明确"| Brief["ResearchBrief<br/>范围、目标、约束"]:::data
 
-    Brief --> Supervisor["SupervisorAgent<br/>拆解研究计划"]:::agent
-    Supervisor -->|"conductResearch"| Researcher["ResearcherAgent<br/>执行子主题研究"]:::agent
-    Researcher -->|"tavilySearch"| Search["SearchAgent<br/>检索与压缩搜索结果"]:::agent
-    Search -->|"结构化搜索摘要"| Researcher
-    Researcher -->|"研究笔记"| Supervisor
-    Supervisor -->|"researchComplete"| Report["ReportAgent<br/>生成最终报告"]:::agent
+    Brief --> Supervisor["SupervisorAgent<br/>拆解独立研究任务"]:::agent
+    Supervisor --> Scheduler["并发调度器<br/>按 max-concurrent-units 执行"]:::data
+
+    subgraph Parallel["并行研究批次"]
+        R1["ResearcherAgent #1<br/>子主题研究"]:::agent
+        R2["ResearcherAgent #2<br/>子主题研究"]:::agent
+        Rn["ResearcherAgent #N<br/>子主题研究"]:::agent
+    end
+
+    Scheduler --> R1
+    Scheduler --> R2
+    Scheduler --> Rn
+    R1 -->|"tavilySearch"| Search["SearchAgent<br/>检索、缓存、摘要降级"]:::agent
+    R2 -->|"tavilySearch"| Search
+    Rn -->|"tavilySearch"| Search
+    Search -->|"结构化搜索摘要"| R1
+    Search -->|"结构化搜索摘要"| R2
+    Search -->|"结构化搜索摘要"| Rn
+    R1 -->|"研究笔记"| Supervisor
+    R2 -->|"研究笔记"| Supervisor
+    Rn -->|"研究笔记"| Supervisor
+    Supervisor --> Report["ReportAgent<br/>生成最终报告"]:::agent
     Report --> Final["Markdown Research Report"]:::output
 ```
 
@@ -113,9 +129,11 @@ flowchart LR
 - **AgentScope v2 原生 ReActAgent 驱动** — 使用 `ReActAgent` + `Toolkit` 接管完整的推理-行动循环，而非仅替换聊天模型
 - **框架无关工具注册中心** — 自定义 `@ResearchTool` 注解 + `ToolRegistry`，按阶段分组，运行时适配
 - **可切换 Agent Runtime** — `agentscope-java`（默认）/ `langchain4j`（备份），通过环境变量一键切换
+- **代码层并行研究调度** — Supervisor 先生成独立子任务，再由 Java 按 `max-concurrent-units` 并发执行 Researcher，避免依赖模型主动并行 tool call
+- **搜索性能优化** — Tavily 查询缓存、URL 级网页摘要缓存、摘要输入截断和短超时降级，减少重复 API 调用和长尾等待
 - **OpenTelemetry + Langfuse 可观测链路** — 三层 span 层级（workflow → stage → agent/model/tool），自定义 `FixedOtelTracingMiddleware` 修复 Reactor 异步上下文传播
 - **中心化研究状态** — `DeepResearchState` 贯穿全阶段，集中管理范围、预算、token、笔记
-- **Budget 预算机制** — MEDIUM/HIGH/ULTRA 三级，控制子研究数、搜索次数、并发数
+- **Budget 预算机制** — MEDIUM/HIGH/ULTRA 三级，控制子研究数、搜索次数、并发数和单次搜索结果数
 - **有界异步任务队列** — `@QueuedAsync` + 有界线程池，防止任务堆积
 - **SSE 实时推送 + Redis 断线重放** — 事件按序列号缓存，重连不丢失
 - **幂等状态机** — CAS 更新防止重复启动研究
@@ -159,6 +177,16 @@ docker compose up -d
 ### 环境变量
 
 编辑 `.env` 文件，参考 `.env.example` 配置数据库、Redis、Tavily、JWT、LLM 框架和可观测链路参数。
+
+常用性能参数：
+
+| 变量 | 默认值 | 说明 |
+|------|------:|------|
+| `RESEARCH_SEARCH_MAX_RESULTS_PER_QUERY` | `3` | 单次 Tavily 搜索最多保留的结果数 |
+| `RESEARCH_SEARCH_SUMMARY_TIMEOUT_SECONDS` | `60` | 单个网页摘要的短超时时间，超时后降级使用原始摘要 |
+| `RESEARCH_SEARCH_SUMMARY_RAW_CONTENT_MAX_CHARS` | `12000` | 送入 LLM 摘要的网页内容最大字符数 |
+| `RESEARCH_SEARCH_SUMMARY_CACHE_ENABLED` | `true` | 是否启用 URL + 内容级网页摘要缓存 |
+| `TAVILY_CACHE_ENABLED` | `true` | 是否启用 Tavily 查询缓存 |
 
 ### Agent 运行时选择
 

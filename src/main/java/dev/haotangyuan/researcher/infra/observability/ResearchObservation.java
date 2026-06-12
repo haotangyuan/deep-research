@@ -53,10 +53,24 @@ public class ResearchObservation {
         if (isAgentscopeNative(state)) {
             return supplier.get();
         }
+        return observeToolSpan("deep_research.tool " + toolName, toolName, stage, state, supplier);
+    }
+
+    public <T> T observeManualTool(String toolName, String stage, DeepResearchState state, Supplier<T> supplier) {
+        return observeToolSpan("execute_tool " + toolName, toolName, stage, state, supplier);
+    }
+
+    private <T> T observeToolSpan(
+            String spanName,
+            String toolName,
+            String stage,
+            DeepResearchState state,
+            Supplier<T> supplier) {
         Context parentContext = ResearchOtelContext.current();
-        Span span = baseSpan("deep_research.tool " + toolName, "tool.execution", state, parentContext)
+        Span span = baseSpan(spanName, "execute_tool", state, parentContext)
                 .setAttribute("tool.name", value(toolName))
                 .setAttribute("agent.stage", value(stage))
+                .setAttribute("gen_ai.tool.call.count", 1L)
                 .startSpan();
         try (Scope ignored = ResearchOtelContext.makeCurrent(parentContext.with(span))) {
             T result = supplier.get();

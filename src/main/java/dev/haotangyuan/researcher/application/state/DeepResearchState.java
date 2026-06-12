@@ -1,10 +1,12 @@
 package dev.haotangyuan.researcher.application.state;
 
-import java.util.List;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchMessage;
+import dev.haotangyuan.researcher.application.agent.runtime.ResearchTokenUsage;
 import dev.haotangyuan.researcher.application.schema.ScopeSchema;
 import dev.haotangyuan.researcher.infra.client.TavilyClient;
 import dev.haotangyuan.researcher.infra.config.BudgetProps;
@@ -82,9 +84,71 @@ public class DeepResearchState {
         return context;
     }
 
+    public DeepResearchState forkForResearch(String topic, Long researchEventId) {
+        return DeepResearchState.builder()
+                .researchId(researchId)
+                .chatHistory(chatHistory)
+                .status(status)
+                .traceMetadata(traceMetadata)
+                .researchBrief(researchBrief)
+                .budget(budget)
+                .currentSupervisorEventId(currentSupervisorEventId)
+                .currentResearchEventId(researchEventId)
+                .researchTopic(topic)
+                .researcherIterations(0)
+                .searchCount(0)
+                .researcherNotes(new ArrayList<>())
+                .searchResults(new LinkedHashMap<>())
+                .searchNotes(new ArrayList<>())
+                .totalInputTokens(0L)
+                .totalOutputTokens(0L)
+                .build();
+    }
+
+    public DeepResearchState forkForSearch(String query, Integer maxResults, String topic) {
+        return DeepResearchState.builder()
+                .researchId(researchId)
+                .chatHistory(chatHistory)
+                .status(status)
+                .traceMetadata(traceMetadata)
+                .researchBrief(researchBrief)
+                .budget(budget)
+                .researchTopic(researchTopic)
+                .currentSupervisorEventId(currentSupervisorEventId)
+                .currentResearchEventId(currentResearchEventId)
+                .query(query)
+                .maxResults(maxResults)
+                .topic(topic)
+                .searchResults(new LinkedHashMap<>())
+                .searchNotes(new ArrayList<>())
+                .totalInputTokens(0L)
+                .totalOutputTokens(0L)
+                .build();
+    }
+
+    public synchronized void addTokenUsage(ResearchTokenUsage tokenUsage) {
+        if (tokenUsage == null) {
+            return;
+        }
+        totalInputTokens = safeLong(totalInputTokens) + tokenUsage.inputTokenCount();
+        totalOutputTokens = safeLong(totalOutputTokens) + tokenUsage.outputTokenCount();
+    }
+
+    public synchronized void mergeTokenUsageFrom(DeepResearchState state) {
+        if (state == null) {
+            return;
+        }
+        totalInputTokens = safeLong(totalInputTokens) + safeLong(state.getTotalInputTokens());
+        totalOutputTokens = safeLong(totalOutputTokens) + safeLong(state.getTotalOutputTokens());
+    }
+
     private static void putIfPresent(Map<String, Object> context, String key, Object value) {
         if (value != null) {
             context.put(key, value);
         }
+    }
+
+    private static long safeLong(Long value) {
+        return value == null ? 0L : value;
     }
 }

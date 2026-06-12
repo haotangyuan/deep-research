@@ -23,6 +23,9 @@ spring:
 tavily:
   api-key: ${TAVILY_API_KEY:}
   base-url: ${TAVILY_BASE_URL:https://api.tavily.com}
+  cache-enabled: ${TAVILY_CACHE_ENABLED:true}
+  cache-ttl-minutes: ${TAVILY_CACHE_TTL_MINUTES:60}
+  cache-max-entries: ${TAVILY_CACHE_MAX_ENTRIES:512}
 
 research:
   agent:
@@ -41,6 +44,14 @@ research:
       enabled: ${AGENTSCOPE_STUDIO_ENABLED:false}
       url: ${AGENTSCOPE_STUDIO_URL:http://localhost:3000}
       project: ${AGENTSCOPE_STUDIO_PROJECT:DeepResearch}
+  search:
+    max-results-per-query: ${RESEARCH_SEARCH_MAX_RESULTS_PER_QUERY:3}
+    summary-timeout-seconds: ${RESEARCH_SEARCH_SUMMARY_TIMEOUT_SECONDS:60}
+    summary-raw-content-max-chars: ${RESEARCH_SEARCH_SUMMARY_RAW_CONTENT_MAX_CHARS:12000}
+    summary-fallback-content-max-chars: ${RESEARCH_SEARCH_SUMMARY_FALLBACK_CONTENT_MAX_CHARS:1200}
+    summary-cache-enabled: ${RESEARCH_SEARCH_SUMMARY_CACHE_ENABLED:true}
+    summary-cache-ttl-minutes: ${RESEARCH_SEARCH_SUMMARY_CACHE_TTL_MINUTES:60}
+    summary-cache-max-entries: ${RESEARCH_SEARCH_SUMMARY_CACHE_MAX_ENTRIES:1024}
   async:
     max-pool-size: 10
     queue-capacity: 50
@@ -53,7 +64,7 @@ research:
         max-concurrent-units: 1
       HIGH:
         max-conduct-count: 4
-        max-search-count: 3
+        max-search-count: 2
         max-concurrent-units: 2
       ULTRA:
         max-conduct-count: 6

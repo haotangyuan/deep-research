@@ -69,6 +69,8 @@ public class AgentPipeline {
             updateResearchSession(researchId, WorkflowStatus.IN_SCOPE, state);
 
             // Phase 2: Supervisor - 执行研究并收集信息
+            state.setStatus(WorkflowStatus.IN_RESEARCH);
+            updateResearchSession(researchId, WorkflowStatus.IN_RESEARCH, state);
             researchObservation.observeStage("SupervisorAgent", state, () -> supervisorAgent.run(state));
 
             status = state.getStatus();
@@ -88,6 +90,8 @@ public class AgentPipeline {
             updateResearchSession(researchId, WorkflowStatus.IN_RESEARCH, state);
 
             // Phase 3: Report - 生成最终报告
+            state.setStatus(WorkflowStatus.IN_REPORT);
+            updateResearchSession(researchId, WorkflowStatus.IN_REPORT, state);
             researchObservation.observeStage("ReportAgent", state, () -> reportAgent.run(state));
 
             status = state.getStatus();

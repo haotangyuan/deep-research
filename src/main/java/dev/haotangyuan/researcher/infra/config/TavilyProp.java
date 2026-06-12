@@ -14,4 +14,7 @@ import org.springframework.context.annotation.Configuration;
 public class TavilyProp {
     private String apiKey;
     private String baseUrl;
+    private boolean cacheEnabled = true;
+    private long cacheTtlMinutes = 60;
+    private int cacheMaxEntries = 512;
 }

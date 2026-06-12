@@ -162,6 +162,17 @@ public class AgentscopeJavaChatClient implements ResearchChatClient {
     }
 
     private Duration agentTimeout(ResearchAgentRequest request) {
+        Object requestTimeoutSeconds = request.runtimeContext().get("llm.timeout.seconds");
+        if (requestTimeoutSeconds != null) {
+            try {
+                long seconds = Long.parseLong(requestTimeoutSeconds.toString());
+                if (seconds > 0) {
+                    return Duration.ofSeconds(seconds);
+                }
+            } catch (NumberFormatException e) {
+                log.warn("Invalid llm.timeout.seconds value: {}", requestTimeoutSeconds);
+            }
+        }
         return agentTimeout(timeout, request.maxIterations());
     }
 
