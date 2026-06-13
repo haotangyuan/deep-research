@@ -4,16 +4,16 @@ export const BUDGET_OPTIONS: { value: BudgetValue; label: string; caption: strin
   {
     value: 'MEDIUM',
     label: '基础',
-    caption: '控制预算',
+    caption: '2主题/2搜/并发1',
   },
   {
     value: 'HIGH',
     label: '进阶',
-    caption: '均衡质量',
+    caption: '4主题/3搜/并发2',
   },
   {
     value: 'ULTRA',
     label: '旗舰',
-    caption: '质量优先',
+    caption: '6主题/4搜/并发3',
   },
 ];

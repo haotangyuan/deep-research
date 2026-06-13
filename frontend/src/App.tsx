@@ -100,6 +100,22 @@ function getStatusIcon(status: string) {
   }
 }
 
+function getStatusLabel(status?: string) {
+  switch (status?.toUpperCase()) {
+    case 'COMPLETED': return '已完成';
+    case 'FAILED': return '失败';
+    case 'NEW': return '准备中';
+    case 'NEED_CLARIFICATION': return '待澄清';
+    case 'QUEUE': return '排队中';
+    case 'START':
+    case 'RUNNING': return '运行中';
+    case 'IN_SCOPE': return '规划中';
+    case 'IN_RESEARCH': return '调研中';
+    case 'IN_REPORT': return '写报告';
+    default: return status || '未知';
+  }
+}
+
 type HistoryUpdateDetail = {
   id: string;
   status?: string;
@@ -920,7 +936,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
               <div className="flex items-center gap-3 mt-1 flex-wrap">
                 <div className="flex items-center gap-1.5">
                   <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} />
-                  <span className="text-xs text-gray-500">{currentResearch.status}</span>
+                  <span className="text-xs text-gray-500">{getStatusLabel(currentResearch.status)}</span>
                 </div>
                 {currentResearch.modelId && (
                   <div className="flex items-center gap-1.5 text-xs text-gray-500">

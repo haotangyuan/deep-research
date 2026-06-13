@@ -188,6 +188,14 @@ docker compose up -d
 | `RESEARCH_SEARCH_SUMMARY_CACHE_ENABLED` | `true` | 是否启用 URL + 内容级网页摘要缓存 |
 | `TAVILY_CACHE_ENABLED` | `true` | 是否启用 Tavily 查询缓存 |
 
+默认预算策略：
+
+| 预算 | 子研究上限 | 每个子研究搜索上限 | 并发研究数 | 单次搜索结果上限 |
+|------|------:|------:|------:|------:|
+| MEDIUM / 基础 | 2 | 2 | 1 | 3 |
+| HIGH / 进阶 | 4 | 3 | 2 | 3 |
+| ULTRA / 旗舰 | 6 | 4 | 3 | 3 |
+
 ### Agent 运行时选择
 
 | 值 | 说明 |
