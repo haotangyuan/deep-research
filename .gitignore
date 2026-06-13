@@ -42,7 +42,6 @@ build/
 .claude/
 .codex/
 .agents
-.codegraph
 
 ### Logs ###
 *.log
