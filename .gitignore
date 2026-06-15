@@ -42,6 +42,7 @@ build/
 .claude/
 .codex/
 .agents
+.workbuddy/
 
 ### Logs ###
 *.log
