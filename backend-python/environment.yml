@@ -1,0 +1,28 @@
+name: deep-research-py
+channels:
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - agentscope==2.0.2
+      - fastapi
+      - uvicorn
+      - sqlalchemy
+      - greenlet
+      - aiomysql
+      - pymysql
+      - redis
+      - pydantic
+      - pydantic-settings
+      - pyjwt
+      - httpx
+      - sse-starlette
+      - python-dotenv
+      - opentelemetry-api
+      - opentelemetry-sdk
+      - opentelemetry-exporter-otlp-proto-http
+      - opentelemetry-instrumentation-fastapi
+      - pytest
+      - pytest-asyncio
+      - anyio

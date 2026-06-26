@@ -10,7 +10,7 @@ Deep Research 整合 LLM 推理、Web 搜索与报告生成，实现从选题澄
 
 ## 核心架构
 
-Deep Research 采用 Spring Boot 后端 + React 前端 + 多 Agent Pipeline 的分层架构。前端通过 REST API 发起研究任务，通过 SSE 订阅长任务进度；后端用有界异步队列承接请求，并在 Agent Pipeline 内完成范围澄清、并发分工研究、搜索压缩和报告生成。
+Deep Research 原始版本采用 Spring Boot 后端 + React 前端 + 多 Agent Pipeline 的分层架构；当前仓库同时提供 `backend-python/` FastAPI 迁移版本，后续本地开发推荐使用 Python 后端启动。前端通过 REST API 发起研究任务，通过 SSE 订阅长任务进度；后端用有界异步队列承接请求，并在 Agent Pipeline 内完成范围澄清、并发分工研究、搜索压缩和报告生成。
 
 ```mermaid
 flowchart TB
@@ -142,6 +142,41 @@ flowchart LR
 
 ## 快速开始
 
+**Python 后端推荐路径**：Conda、Python 3.11、MySQL 8.0+、Redis 6.0+
+
+```bash
+# 创建并同步 Python 后端环境
+conda env create -f backend-python/environment.yml
+# 或后续更新
+conda env update -f backend-python/environment.yml --prune
+
+# 配置 Python 后端
+cp backend-python/.env.example backend-python/.env
+
+# 启动 FastAPI 后端
+cd backend-python
+./start-python-backend.sh
+```
+
+默认连接 `db_deep_research`，本地 MySQL 可使用 `root / 12345678`。研究模型仍从数据库 `model` 表读取，真实链路测试使用数据库中已有的 `mimo` 模型配置。
+
+前端仍按原方式启动：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+后端 API 启动于 `http://localhost:8080`
+
+- **API 文档 (Scalar)**: http://localhost:8080/scalar/index.html
+- **OpenAPI 规范**: http://localhost:8080/v3/api-docs
+
+Python 后端详细说明见 [backend-python/README.md](backend-python/README.md)。
+
+### Java 后端保留启动方式
+
 **环境要求**：Java 21、Maven 3.8+、MySQL 8.0+、Redis 6.0+
 
 ```bash
@@ -169,11 +204,6 @@ java -jar target/researcher-0.0.1-SNAPSHOT.jar
 docker compose up -d
 ```
 
-后端 API 启动于 `http://localhost:8080`
-
-- **API 文档 (Scalar)**: http://localhost:8080/scalar/index.html
-- **OpenAPI 规范**: http://localhost:8080/v3/api-docs
-
 ### 环境变量
 
 编辑 `.env` 文件，参考 `.env.example` 配置数据库、Redis、Tavily、JWT、LLM 框架和可观测链路参数。
@@ -187,6 +217,7 @@ docker compose up -d
 | `RESEARCH_SEARCH_SUMMARY_RAW_CONTENT_MAX_CHARS` | `12000` | 送入 LLM 摘要的网页内容最大字符数 |
 | `RESEARCH_SEARCH_SUMMARY_CACHE_ENABLED` | `true` | 是否启用 URL + 内容级网页摘要缓存 |
 | `TAVILY_CACHE_ENABLED` | `true` | 是否启用 Tavily 查询缓存 |
+| `RESEARCH_REPORT_FINDINGS_MAX_CHARS` | `20000` | Python 后端最终报告阶段研究材料最大字符数 |
 
 默认预算策略：
 
@@ -217,6 +248,8 @@ LANGFUSE_SECRET_KEY=sk-lf-xxxxx
 ```
 
 支持 Langfuse（OTLP HTTP）和通用 OTLP 后端（Jaeger 等）。详见 [doc/intro/技术亮点.md](doc/intro/技术亮点.md) 第 4 节。
+
+Python 后端同样支持 OpenTelemetry + Langfuse，配置项保持一致，详见 [backend-python/README.md](backend-python/README.md#可观测链路)。
 
 ### 前端部署
 
