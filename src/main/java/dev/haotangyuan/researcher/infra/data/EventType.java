@@ -11,5 +11,6 @@ public class EventType {
     public static final String RESEARCH = "RESEARCH";     // 深入研究阶段
     public static final String SEARCH = "SEARCH";         // 搜索阶段
     public static final String REPORT = "REPORT";         // 报告生成阶段
+    public static final String DIRECTION_CONFIRM = "DIRECTION_CONFIRM"; // 方向确认阶段
     public static final String ERROR = "ERROR";           // 错误事件
 }

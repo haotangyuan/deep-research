@@ -41,7 +41,7 @@ public class SupervisorPrompts {
             }
             </Output Format>
 
-            今天的日期是 {date}。
+            今天是 {date}。不要询问用户当前年份或日期。
             """;
 
     public final static String LEAD_RESEARCHER_PROMPT = """
@@ -122,6 +122,6 @@ public class SupervisorPrompts {
             4. 质量优先——宁可信息充分再完成，也不要仓促结束
             </Critical Reminders>
 
-            今天的日期是 {date}。
+            今天是 {date}。不要询问用户当前年份或日期。
             """;
 }

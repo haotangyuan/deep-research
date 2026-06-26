@@ -3,6 +3,7 @@ package dev.haotangyuan.researcher.interfaces.controller;
 import dev.haotangyuan.researcher.infra.common.Result;
 import dev.haotangyuan.researcher.infra.common.Results;
 import dev.haotangyuan.researcher.infra.sse.SseHub;
+import dev.haotangyuan.researcher.interfaces.dto.req.ConfirmDirectionReqDTO;
 import dev.haotangyuan.researcher.interfaces.dto.req.SendMessageReqDTO;
 import dev.haotangyuan.researcher.interfaces.dto.resp.CreateResearchRespDTO;
 import dev.haotangyuan.researcher.interfaces.dto.resp.ResearchMessageRespDTO;
@@ -62,5 +63,22 @@ public class ResearchController {
             @RequestHeader("X-Client-Id") String clientId, // 前端记得分配
             @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId) {
         return sseHub.connect(userId, researchId, clientId, lastEventId);
+    }
+
+    /** HITL 方向确认：APPROVE 确认并继续，REVISE 修改后重新分析 */
+    @PostMapping("/api/v1/research/{researchId}/direction-action")
+    public Result<SendMessageRespDTO> confirmDirection(
+            @RequestAttribute("userId") Long userId,
+            @PathVariable String researchId,
+            @RequestBody ConfirmDirectionReqDTO reqDTO) {
+        return Results.success(researchService.confirmDirection(userId, researchId, reqDTO));
+    }
+
+    /** 取消研究中研究 */
+    @PostMapping("/api/v1/research/{researchId}/cancel")
+    public Result<SendMessageRespDTO> cancelResearch(
+            @RequestAttribute("userId") Long userId,
+            @PathVariable String researchId) {
+        return Results.success(researchService.cancelResearch(userId, researchId));
     }
 }

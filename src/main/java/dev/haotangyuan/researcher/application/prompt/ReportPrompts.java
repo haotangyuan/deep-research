@@ -111,6 +111,6 @@ public class ReportPrompts {
             - 【强制】无法找到 URL 的材料只能作为背景理解，不能分配来源编号
             </Citation Rules>
 
-            今天的日期是 {date}。
+            今天是 {date}。不要询问用户当前年份或日期。
             """;
 }
