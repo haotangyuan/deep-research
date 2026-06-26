@@ -61,7 +61,8 @@ public class ScopePrompts {
             }
             </Output Schema>
 
-            今天的日期是 {date}。
+            今天是 {date}。
+            注意：请直接使用此日期作为当前日期，不要向用户询问当前年份或日期。
             """;
 
     public final static String TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT = """
@@ -118,6 +119,7 @@ public class ScopePrompts {
             }
             </Output Schema>
 
-            今天的日期是 {date}。
+            今天是 {date}。
+            注意：请直接使用此日期作为当前日期，不要向用户询问当前年份或日期。
             """;
 }

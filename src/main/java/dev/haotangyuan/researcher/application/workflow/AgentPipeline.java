@@ -11,6 +11,7 @@ import dev.haotangyuan.researcher.domain.mapper.ResearchSessionMapper;
 import dev.haotangyuan.researcher.infra.exception.WorkflowException;
 import dev.haotangyuan.researcher.infra.observability.ResearchObservation;
 import dev.haotangyuan.researcher.infra.sse.SseHub;
+import dev.haotangyuan.researcher.infra.util.CheckpointStore;
 import dev.haotangyuan.researcher.infra.util.EventPublisher;
 import dev.haotangyuan.researcher.infra.util.SequenceUtil;
 
@@ -35,6 +36,7 @@ public class AgentPipeline {
     private final EventPublisher eventPublisher;
     private final ModelHandler modelHandler;
     private final ResearchObservation researchObservation;
+    private final CheckpointStore checkpointStore;
 
     @QueuedAsync
     public void run(DeepResearchState state) {
@@ -44,7 +46,18 @@ public class AgentPipeline {
             state.setStatus(WorkflowStatus.START);
             updateResearchSession(researchId, WorkflowStatus.START, state);
 
-            // Phase 1: Scope - 确定研究范围和问题
+            // === HITL 恢复路径：跳过 ScopeAgent，直接进入 Supervisor ===
+            if (state.isSkipScopePhase()) {
+                log.info("从HITL恢复，跳过ScopeAgent，researchId={}", researchId);
+                state.setStatus(WorkflowStatus.IN_SCOPE);
+                updateResearchSession(researchId, WorkflowStatus.IN_SCOPE, state);
+                executePhase2And3(state);
+                // 恢复成功，清理 checkpoint
+                checkpointStore.remove(researchId);
+                return;
+            }
+
+            // === Phase 1: Scope - 确定研究范围和问题 ===
             researchObservation.observeStage("ScopeAgent", state, () -> scopeAgent.run(state));
 
             String status = state.getStatus();
@@ -68,50 +81,27 @@ public class AgentPipeline {
             }
             updateResearchSession(researchId, WorkflowStatus.IN_SCOPE, state);
 
-            // Phase 2: Supervisor - 执行研究并收集信息
-            state.setStatus(WorkflowStatus.IN_RESEARCH);
-            updateResearchSession(researchId, WorkflowStatus.IN_RESEARCH, state);
-            researchObservation.observeStage("SupervisorAgent", state, () -> supervisorAgent.run(state));
-
-            status = state.getStatus();
-            if (WorkflowStatus.FAILED.equals(status)) {
-                log.warn("Supervisor phase failed for researchId={}, status={}", researchId, status);
-                eventPublisher.publishEvent(researchId, EventType.ERROR, "研究规划失败", null);
-                updateResearchSession(researchId, WorkflowStatus.FAILED, state);
-                return;
-            }
-            if (!WorkflowStatus.IN_RESEARCH.equals(status)) {
-                log.warn("Unexpected status after Supervisor phase for researchId={}, status={}", researchId, status);
-                state.setStatus(WorkflowStatus.FAILED);
-                eventPublisher.publishEvent(researchId, EventType.ERROR, "研究规划状态异常", "status=" + status);
-                updateResearchSession(researchId, WorkflowStatus.FAILED, state);
-                return;
-            }
-            updateResearchSession(researchId, WorkflowStatus.IN_RESEARCH, state);
-
-            // Phase 3: Report - 生成最终报告
-            state.setStatus(WorkflowStatus.IN_REPORT);
-            updateResearchSession(researchId, WorkflowStatus.IN_REPORT, state);
-            researchObservation.observeStage("ReportAgent", state, () -> reportAgent.run(state));
-
-            status = state.getStatus();
-            if (WorkflowStatus.FAILED.equals(status)) {
-                log.warn("Report phase failed for researchId={}, status={}", researchId, status);
-                eventPublisher.publishEvent(researchId, EventType.ERROR, "报告生成失败", null);
-                updateResearchSession(researchId, WorkflowStatus.FAILED, state);
-                return;
-            }
-            if (!WorkflowStatus.IN_REPORT.equals(status)) {
-                log.warn("Unexpected status after Report phase for researchId={}, status={}", researchId, status);
-                state.setStatus(WorkflowStatus.FAILED);
-                eventPublisher.publishEvent(researchId, EventType.ERROR, "报告生成状态异常", "status=" + status);
-                updateResearchSession(researchId, WorkflowStatus.FAILED, state);
+            // === HITL 方向确认检查点 ===
+            if ("DIRECTION_ONLY".equals(state.getHitlMode())) {
+                // 保存完整状态到 Redis，支持后续恢复
+                checkpointStore.save(researchId, state);
+                // 更新 DB 状态为等待确认
+                state.setStatus(WorkflowStatus.AWAITING_DIRECTION_CONFIRM);
+                updateResearchSession(researchId, WorkflowStatus.AWAITING_DIRECTION_CONFIRM, state);
+                // 推送 HITL 事件到前端
+                eventPublisher.publishEvent(researchId, EventType.DIRECTION_CONFIRM,
+                        "研究方向已确定，请确认", state.getResearchBrief(),
+                        state.getCurrentScopeEventId());
+                eventPublisher.publishMessage(researchId, "assistant",
+                        "### 研究方向确认\n\n" + state.getResearchBrief()
+                                + "\n\n---\n\n请确认研究方向是否准确，或提出修改意见。");
+                log.info("HITL 方向确认暂停 researchId={}", researchId);
                 return;
             }
 
-            state.setStatus(WorkflowStatus.COMPLETED);
-            updateResearchSession(researchId, WorkflowStatus.COMPLETED, state);
-            log.info("Final report generated for researchId={}", researchId);
+            // 正常路径：继续执行 Phase 2 + Phase 3
+            executePhase2And3(state);
+
         } catch (WorkflowException e) {
             state.setStatus(WorkflowStatus.FAILED);
             eventPublisher.publishEvent(researchId, EventType.ERROR,
@@ -137,11 +127,105 @@ public class AgentPipeline {
         }
     }
 
+    /**
+     * 执行 Phase 2 (Supervisor) 和 Phase 3 (Report)，正常路径和 HITL 恢复路径共用
+     */
+    private void executePhase2And3(DeepResearchState state) {
+        String researchId = state.getResearchId();
+
+        // 检查是否被取消
+        if (isCancelled(researchId)) {
+            log.info("研究已被取消，停止执行 researchId={}", researchId);
+            state.setStatus(WorkflowStatus.CANCELLED);
+            updateResearchSession(researchId, WorkflowStatus.CANCELLED, state);
+            return;
+        }
+
+        // Phase 2: Supervisor - 执行研究并收集信息
+        state.setStatus(WorkflowStatus.IN_RESEARCH);
+        updateResearchSession(researchId, WorkflowStatus.IN_RESEARCH, state);
+        researchObservation.observeStage("SupervisorAgent", state, () -> supervisorAgent.run(state));
+
+        String status = state.getStatus();
+        if (WorkflowStatus.FAILED.equals(status)) {
+            log.warn("Supervisor phase failed for researchId={}, status={}", researchId, status);
+            eventPublisher.publishEvent(researchId, EventType.ERROR, "研究规划失败", null);
+            updateResearchSession(researchId, WorkflowStatus.FAILED, state);
+            return;
+        }
+        if (WorkflowStatus.CANCELLED.equals(status)) {
+            log.info("Supervisor phase detected cancellation for researchId={}", researchId);
+            updateResearchSession(researchId, WorkflowStatus.CANCELLED, state);
+            return;
+        }
+        if (!WorkflowStatus.IN_RESEARCH.equals(status)) {
+            log.warn("Unexpected status after Supervisor phase for researchId={}, status={}", researchId, status);
+            state.setStatus(WorkflowStatus.FAILED);
+            eventPublisher.publishEvent(researchId, EventType.ERROR, "研究规划状态异常", "status=" + status);
+            updateResearchSession(researchId, WorkflowStatus.FAILED, state);
+            return;
+        }
+        updateResearchSession(researchId, WorkflowStatus.IN_RESEARCH, state);
+
+        // 检查是否被取消（Report 阶段前）
+        if (isCancelled(researchId)) {
+            log.info("研究已被取消，停止执行 researchId={}", researchId);
+            state.setStatus(WorkflowStatus.CANCELLED);
+            updateResearchSession(researchId, WorkflowStatus.CANCELLED, state);
+            return;
+        }
+
+        // Phase 3: Report - 生成最终报告
+        state.setStatus(WorkflowStatus.IN_REPORT);
+        updateResearchSession(researchId, WorkflowStatus.IN_REPORT, state);
+        researchObservation.observeStage("ReportAgent", state, () -> reportAgent.run(state));
+
+        status = state.getStatus();
+        if (WorkflowStatus.FAILED.equals(status)) {
+            log.warn("Report phase failed for researchId={}, status={}", researchId, status);
+            eventPublisher.publishEvent(researchId, EventType.ERROR, "报告生成失败", null);
+            updateResearchSession(researchId, WorkflowStatus.FAILED, state);
+            return;
+        }
+        if (WorkflowStatus.CANCELLED.equals(status)) {
+            log.info("Report phase detected cancellation for researchId={}", researchId);
+            updateResearchSession(researchId, WorkflowStatus.CANCELLED, state);
+            return;
+        }
+        if (!WorkflowStatus.IN_REPORT.equals(status)) {
+            log.warn("Unexpected status after Report phase for researchId={}, status={}", researchId, status);
+            state.setStatus(WorkflowStatus.FAILED);
+            eventPublisher.publishEvent(researchId, EventType.ERROR, "报告生成状态异常", "status=" + status);
+            updateResearchSession(researchId, WorkflowStatus.FAILED, state);
+            return;
+        }
+
+        state.setStatus(WorkflowStatus.COMPLETED);
+        updateResearchSession(researchId, WorkflowStatus.COMPLETED, state);
+        log.info("Final report generated for researchId={}", researchId);
+    }
+
+    /**
+     * 检查研究是否已被取消（取消时 Pipeline 应停止执行）
+     */
+    private boolean isCancelled(String researchId) {
+        try {
+            String dbStatus = researchSessionMapper.selectById(researchId).getStatus();
+            if (WorkflowStatus.CANCELLED.equals(dbStatus)) {
+                return true;
+            }
+        } catch (Exception e) {
+            log.warn("检查取消状态失败 researchId={}", researchId, e);
+        }
+        return false;
+    }
+
     private void updateResearchSession(String researchId, String status, DeepResearchState state) {
         boolean setStartTime = WorkflowStatus.START.equals(status);
         boolean setCompleteTime = WorkflowStatus.COMPLETED.equals(status)
                 || WorkflowStatus.FAILED.equals(status)
-                || WorkflowStatus.NEED_CLARIFICATION.equals(status);
+                || WorkflowStatus.NEED_CLARIFICATION.equals(status)
+                || WorkflowStatus.AWAITING_DIRECTION_CONFIRM.equals(status);
         researchSessionMapper.updateSession(researchId, status, setStartTime, setCompleteTime,
                 state.getTotalInputTokens(), state.getTotalOutputTokens());
     }

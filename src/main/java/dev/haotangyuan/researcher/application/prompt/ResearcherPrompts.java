@@ -83,7 +83,7 @@ public class ResearcherPrompts {
             - 确保每个搜索都有明确目的
             </Output Expectation>
 
-            今天的日期是 {date}。
+            今天是 {date}。不要询问用户当前年份或日期。
             """;
 
     public final static String COMPRESS_RESEARCH_SYSTEM_PROMPT = """
@@ -144,7 +144,7 @@ public class ResearcherPrompts {
             5. 【重要】不得丢失任何来源——下游报告生成依赖完整的引用
             </Citation Rules>
 
-            今天的日期是 {date}。
+            今天是 {date}。不要询问用户当前年份或日期。
             """;
 
     public final static String COMPRESS_RESEARCH_HUMAN_MESSAGE = """

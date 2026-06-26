@@ -64,6 +64,11 @@ public class DeepResearchState {
     private Long currentResearchEventId;
     private Long currentSearchEventId;
 
+    // === HITL 相关 ===
+    private String hitlMode;         // NONE / DIRECTION_ONLY
+    private boolean skipScopePhase;  // 恢复时跳过 ScopeAgent
+    private String hitlFeedback;     // 用户修订意见 (REVISE 时携带)
+
     // === Token 统计 ===
     private Long totalInputTokens;
     private Long totalOutputTokens;

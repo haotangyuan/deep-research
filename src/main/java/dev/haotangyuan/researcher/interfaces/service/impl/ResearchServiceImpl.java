@@ -13,6 +13,7 @@ import dev.haotangyuan.researcher.application.model.ModelHandler;
 import dev.haotangyuan.researcher.domain.mapper.ChatMessageMapper;
 import dev.haotangyuan.researcher.domain.mapper.ResearchSessionMapper;
 import dev.haotangyuan.researcher.infra.exception.ResearchException;
+import dev.haotangyuan.researcher.interfaces.dto.req.ConfirmDirectionReqDTO;
 import dev.haotangyuan.researcher.interfaces.dto.req.SendMessageReqDTO;
 import dev.haotangyuan.researcher.interfaces.dto.resp.CreateResearchRespDTO;
 import dev.haotangyuan.researcher.interfaces.dto.resp.ResearchMessageRespDTO;
@@ -23,6 +24,7 @@ import dev.haotangyuan.researcher.infra.config.AgentRuntimeProps;
 import dev.haotangyuan.researcher.infra.data.TimelineItem;
 import dev.haotangyuan.researcher.infra.observability.ResearchTraceMetadata;
 import dev.haotangyuan.researcher.infra.util.CacheUtil;
+import dev.haotangyuan.researcher.infra.util.CheckpointStore;
 import dev.haotangyuan.researcher.infra.util.ResearchMessageConverter;
 import dev.haotangyuan.researcher.interfaces.service.ResearchService;
 import dev.haotangyuan.researcher.interfaces.service.ModelService;
@@ -50,6 +52,7 @@ public class ResearchServiceImpl implements ResearchService {
     private final BudgetProps budgetConfig;
     private final ModelService modelService;
     private final AgentRuntimeProps agentRuntimeProps;
+    private final CheckpointStore checkpointStore;
 
     @Override
     public CreateResearchRespDTO createResearch(Long userId, Integer num) {
@@ -211,6 +214,12 @@ public class ResearchServiceImpl implements ResearchService {
         
         BudgetProps.BudgetLevel budgetLevel = budgetConfig.getLevel(budget);
 
+        // HITL 模式，默认 DIRECTION_ONLY
+        String hitlMode = sendMessageReqDTO.getHitlMode();
+        if (hitlMode == null || hitlMode.isBlank()) {
+            hitlMode = "DIRECTION_ONLY";
+        }
+
         // 保存用户消息
         cacheUtil.saveMessage(researchId, "user", sendMessageReqDTO.getContent());
 
@@ -249,12 +258,78 @@ public class ResearchServiceImpl implements ResearchService {
                 // Token 统计
                 .totalInputTokens(0L)
                 .totalOutputTokens(0L)
+                // HITL 配置
+                .hitlMode(hitlMode)
+                .skipScopePhase(false)
                 .build();
         agentPipeline.run(state);
 
         return SendMessageRespDTO.builder()
                 .id(researchId)
                 .content("已接受任务")
+                .build();
+    }
+
+    @Override
+    public SendMessageRespDTO confirmDirection(Long userId, String researchId,
+                                                ConfirmDirectionReqDTO reqDTO) {
+        // CAS 更新状态，保证幂等
+        int affected = researchSessionMapper.casConfirmDirection(researchId, userId);
+        if (affected == 0) {
+            throw new ResearchException("确认操作失败，当前状态不允许确认");
+        }
+
+        // 从 Redis 恢复 DeepResearchState
+        DeepResearchState savedState = checkpointStore.load(researchId);
+        if (savedState == null) {
+            throw new ResearchException("会话已过期，请重新发起研究");
+        }
+
+        ResearchSession session = researchSessionMapper.selectById(researchId);
+
+        // 重新注册模型（finally 块中已移除）
+        Model model = modelService.getModelById(userId, session.getModelId());
+        modelHandler.addModel(researchId, model);
+
+        String action = reqDTO.getAction();
+        if ("APPROVE".equals(action)) {
+            // 用户确认方向，跳过 ScopeAgent 直接进入 Supervisor
+            cacheUtil.saveMessage(researchId, "user", "确认研究方向，开始执行研究");
+            savedState.setSkipScopePhase(true);
+            savedState.setStatus(WorkflowStatus.QUEUE);
+        } else {
+            // REVISE：用户修改方向，带上反馈重新执行 ScopeAgent
+            String feedback = reqDTO.getFeedback();
+            String msg = feedback != null && !feedback.isBlank()
+                    ? "修改意见: " + feedback : "请重新调整研究方向";
+            cacheUtil.saveMessage(researchId, "user", msg);
+            savedState.setSkipScopePhase(false);
+            savedState.setHitlFeedback(feedback);
+            savedState.setStatus(WorkflowStatus.QUEUE);
+            savedState.setResearchBrief(null); // 清空旧的，让 ScopeAgent 重新生成
+        }
+
+        // 恢复 pipeline 执行
+        agentPipeline.run(savedState);
+
+        return SendMessageRespDTO.builder()
+                .id(researchId)
+                .content("APPROVE".equals(action) ? "研究方向已确认，开始执行研究"
+                        : "已收到修改意见，重新分析研究方向")
+                .build();
+    }
+
+    @Override
+    public SendMessageRespDTO cancelResearch(Long userId, String researchId) {
+        int affected = researchSessionMapper.cancelResearch(researchId, userId);
+        if (affected == 0) {
+            throw new ResearchException("取消失败，研究已完成或不存在");
+        }
+        cacheUtil.saveMessage(researchId, "user", "用户取消了本次研究");
+        cacheUtil.saveMessage(researchId, "assistant", "研究已取消");
+        return SendMessageRespDTO.builder()
+                .id(researchId)
+                .content("研究已取消")
                 .build();
     }
 }

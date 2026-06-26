@@ -4,7 +4,7 @@ import { Plus, Loader2, Send, AlertCircle, Sparkles, Search, Brain, Globe, FileS
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
-import { researchApi, modelApi, ResearchStatusResponse, ChatMessage, WorkflowEvent, ModelInfo, SendMessageRequest } from './services/api';
+import { researchApi, modelApi, ResearchStatusResponse, ChatMessage, WorkflowEvent, ModelInfo, SendMessageRequest, DirectionAction } from './services/api';
 import { getToken } from './services/auth';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/AuthModal';
@@ -89,6 +89,7 @@ function getStatusIcon(status: string) {
     case 'FAILED': return <AlertCircle className="w-4 h-4 text-red-500" />;
     case 'NEW': return <div className="w-2 h-2 rounded-full bg-gray-300" />;
     case 'NEED_CLARIFICATION': return <MessageSquare className="w-4 h-4 text-amber-500" />;
+    case 'AWAITING_DIRECTION_CONFIRM': return <AlertCircle className="w-4 h-4 text-orange-500" />;
     case 'QUEUE':
     case 'START':
     case 'RUNNING':
@@ -112,6 +113,7 @@ function getStatusLabel(status?: string) {
     case 'IN_SCOPE': return '规划中';
     case 'IN_RESEARCH': return '调研中';
     case 'IN_REPORT': return '写报告';
+    case 'AWAITING_DIRECTION_CONFIRM': return '待确认方向';
     default: return status || '未知';
   }
 }
@@ -130,6 +132,7 @@ const ACTIVE_HISTORY_STATUSES = new Set([
   'START',
   'RUNNING',
   'IN_SCOPE',
+  'AWAITING_DIRECTION_CONFIRM',
   'IN_RESEARCH',
   'IN_REPORT',
 ]);
@@ -383,7 +386,17 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
   // Events expand/collapse state
   const [allEventsExpanded, setAllEventsExpanded] = useState(false);
 
+  // HITL 方向确认状态
+  const [hitlReviseFeedback, setHitlReviseFeedback] = useState('');
+  const [isHitlConfirming, setIsHitlConfirming] = useState(false);
+  const hitlResearchBrief = useMemo(() => {
+    if (currentResearch?.status !== 'AWAITING_DIRECTION_CONFIRM') return null;
+    const dirEvent = [...(currentResearch?.events || [])].reverse().find(e => e.type === 'DIRECTION_CONFIRM');
+    return dirEvent?.content || null;
+  }, [currentResearch?.status, currentResearch?.events]);
+
   const abortControllerRef = useRef<AbortController | null>(null);
+  const cancelledRef = useRef(false);  // 取消标记，阻止残余 SSE 事件
   const processedIdsRef = useRef<Set<string>>(new Set());
   const chatEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -554,6 +567,13 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
   useEffect(() => {
     if (!id) {
       prepareDraftResearch();
+      // 监听从终端状态研究跳转过来的消息
+      const handleResend = (e: Event) => {
+        const detail = (e as CustomEvent<string>).detail;
+        if (detail) setInputValue(detail);
+      };
+      window.addEventListener('resend-message', handleResend);
+      return () => window.removeEventListener('resend-message', handleResend);
     }
   }, [id, prepareDraftResearch]);
 
@@ -702,6 +722,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
   const connectSSE = useCallback((researchId: string, options?: { resetCursor?: boolean }) => {
     if (!researchId) return;
     shouldAutoReconnectRef.current = true;
+    cancelledRef.current = false; // 新建连接时重置取消标记
 
     const shouldResetCursor = options?.resetCursor || activeResearchRef.current !== researchId;
     if (shouldResetCursor) {
@@ -749,6 +770,8 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
         }
       },
       onmessage: (msg) => {
+        // 取消后忽略残余 SSE 事件
+        if (cancelledRef.current) return;
         if (msg.id) {
           lastEventIdMapRef.current[researchId] = msg.id;
         }
@@ -805,6 +828,40 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
     });
   }, [clientId, syncResearchStatus]);
 
+  // HITL 方向确认处理（在 connectSSE 之后定义，避免循环引用）
+  const handleHitlConfirm = useCallback(async (action: DirectionAction, feedback?: string) => {
+    if (!currentResearch) return;
+    setIsHitlConfirming(true);
+    try {
+      await researchApi.confirmDirection(currentResearch.id, { action, feedback });
+      // 成功后立即更新状态，隐藏 HITL 卡片，恢复 RUNNING 状态
+      setIsHitlConfirming(false);
+      setHitlReviseFeedback('');
+      setCurrentResearch(prev => prev ? { ...prev, status: 'RUNNING' } : prev);
+      // 同时拉取最新状态，再连接 SSE 接收后续推送
+      syncResearchStatus(currentResearch.id);
+      connectSSE(currentResearch.id, { resetCursor: true });
+    } catch (e: any) {
+      console.error('方向确认失败', e);
+      setIsHitlConfirming(false);
+    }
+  }, [currentResearch, connectSSE, syncResearchStatus]);
+
+  // 取消研究中研究
+  const handleCancelResearch = useCallback(async () => {
+    if (!currentResearch) return;
+    if (!window.confirm('确定要取消当前研究吗？')) return;
+    try {
+      cancelledRef.current = true; // 阻止残余 SSE 事件
+      await researchApi.cancelResearch(currentResearch.id);
+      setCurrentResearch(prev => prev ? { ...prev, status: 'CANCELLED' } : prev);
+      disconnectSSE();
+      syncResearchStatus(currentResearch.id);
+    } catch (e: any) {
+      setError(e.message || '取消失败');
+    }
+  }, [currentResearch, disconnectSSE, syncResearchStatus]);
+
   const sendMessage = async () => {
     if (!inputValue.trim()) return;
     const content = inputValue.trim();
@@ -824,7 +881,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
         if (!newId) {
           throw new Error('未找到可用的研究');
         }
-        const modelConfig: Partial<SendMessageRequest> = { modelId: resolvedModelId, budget: selectedBudget };
+        const modelConfig: Partial<SendMessageRequest> = { modelId: resolvedModelId, budget: selectedBudget, hitlMode: 'DIRECTION_ONLY' as const };
         const tempMessage: ChatMessage = {
           id: Date.now(),
           researchId: newId,
@@ -866,8 +923,22 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
       content,
       createTime: new Date().toISOString()
     };
+    // 终端状态则跳转新研究
+    if (currentResearch.status && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(currentResearch.status.toUpperCase())) {
+      navigate('/new');
+      setTimeout(() => window.dispatchEvent(new CustomEvent('resend-message', { detail: content })), 100);
+      return;
+    }
+
+    // 研究中不允许发送新消息
+    const activeResearchStatuses = ['QUEUE', 'START', 'RUNNING', 'IN_SCOPE', 'IN_RESEARCH', 'IN_REPORT'];
+    if (currentResearch.status && activeResearchStatuses.includes(currentResearch.status.toUpperCase())) {
+      setError('研究正在进行中，请等待完成，或点击「取消」终止当前研究');
+      return;
+    }
+
     const shouldAttachModel = !currentResearch.modelId;
-    const modelConfig = shouldAttachModel ? { modelId: resolvedModelId, budget: selectedBudget } : undefined;
+    const modelConfig = shouldAttachModel ? { modelId: resolvedModelId, budget: selectedBudget, hitlMode: 'DIRECTION_ONLY' as const } : undefined;
 
     setCurrentResearch(prev => prev ? {
       ...prev,
@@ -982,19 +1053,31 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
                 )}
               </div>
             </div>
-            {/* Expand/Collapse all events button */}
-            <button
-              onClick={() => setAllEventsExpanded(!allEventsExpanded)}
-              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-                allEventsExpanded 
-                  ? 'bg-gray-900 text-white hover:bg-gray-800' 
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-              title={allEventsExpanded ? '收起所有事件详情' : '展开所有事件详情'}
-            >
-              <ChevronsUpDown className="w-4 h-4" />
-              <span>{allEventsExpanded ? '收起详情' : '展开详情'}</span>
-            </button>
+            {/* Cancel / Expand buttons */}
+            <div className="flex items-center gap-2">
+              {currentResearch && !['COMPLETED', 'FAILED', 'CANCELLED', 'NEED_CLARIFICATION'].includes(currentResearch.status) && (
+                <button
+                  onClick={handleCancelResearch}
+                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-colors"
+                  title="取消研究"
+                >
+                  <AlertCircle className="w-4 h-4" />
+                  <span>取消</span>
+                </button>
+              )}
+              <button
+                onClick={() => setAllEventsExpanded(!allEventsExpanded)}
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+                  allEventsExpanded
+                    ? 'bg-gray-900 text-white hover:bg-gray-800'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+                title={allEventsExpanded ? '收起所有事件详情' : '展开所有事件详情'}
+              >
+                <ChevronsUpDown className="w-4 h-4" />
+                <span>{allEventsExpanded ? '收起详情' : '展开详情'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -1026,6 +1109,8 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
                     </div>
                   );
                 }
+                // 检测是否是 HITL 方向确认消息（最后一条 assistant 消息 + 状态为 AWAITING_DIRECTION_CONFIRM）
+                const isHitlMessage = !isUser && currentResearch?.status === 'AWAITING_DIRECTION_CONFIRM' && idx === timelineItems.length - 1;
                 return (
                   <div key={`msg-${item.data.id}`} className={`flex gap-4 ${isUser ? 'flex-row-reverse' : ''}`}>
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${isUser ? 'bg-black text-white' : 'bg-gray-200 text-gray-600'}`}>
@@ -1036,6 +1121,40 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
                         <div className="whitespace-pre-wrap text-sm">
                           {isUser ? item.data.content : <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.data.content}</ReactMarkdown>}
                         </div>
+                        {/* HITL 方向确认按钮：嵌入在 AI 消息框底部 */}
+                        {isHitlMessage && hitlResearchBrief && (
+                          <div className="mt-4 pt-3 border-t border-orange-200">
+                            {isHitlConfirming ? (
+                              <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
+                                <Loader2 className="w-4 h-4 animate-spin" />正在处理...
+                              </div>
+                            ) : (
+                              <div className="space-y-2">
+                                <button
+                                  onClick={() => handleHitlConfirm('APPROVE')}
+                                  className="w-full px-4 py-2.5 rounded-xl bg-green-600 text-white text-sm font-semibold hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
+                                >
+                                  <CheckCircle2 className="w-4 h-4" /> 确认方向，开始研究
+                                </button>
+                                <div className="flex gap-2 items-start">
+                                  <textarea
+                                    value={hitlReviseFeedback}
+                                    onChange={(e) => setHitlReviseFeedback(e.target.value)}
+                                    placeholder="输入修改意见..."
+                                    style={{ flex: 1, padding: '8px 12px', fontSize: '14px', border: '1px solid #d1d5db', borderRadius: '8px', resize: 'none', outline: 'none' }}
+                                    rows={2}
+                                  />
+                                  <button
+                                    onClick={() => handleHitlConfirm('REVISE', hitlReviseFeedback)}
+                                    className="px-5 py-2 rounded-xl bg-orange-600 text-white text-sm font-semibold hover:bg-orange-700 transition-colors flex-shrink-0"
+                                  >
+                                    提交修改
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                       {renderCopyButton(item.data, isUser)}
                     </div>
@@ -1082,6 +1201,8 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
           </div>
         )}
 
+        {/* HITL 方向确认已嵌入 AI 消息框中，此处不再单独渲染 */}
+
         <div className={`${isNewChat ? 'flex-1 flex flex-col items-center justify-center p-8' : 'p-6 bg-white border-t border-gray-100 shrink-0'}`}>
           <div className={`w-full ${isNewChat ? 'max-w-2xl' : 'max-w-4xl'} mx-auto`}>
             
@@ -1100,15 +1221,16 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
               </div>
             )}
 
-            {/* Unified Input Card - 只在可输入状态显示 */}
-            {(!currentResearch || ['NEW', 'NEED_CLARIFICATION', 'COMPLETED', 'FAILED'].includes(currentResearch.status)) && (
+            {/* Unified Input Card - 研究进行中始终显示 */}
+            {true && (
             <div className={`bg-[#f4f4f4] border border-transparent rounded-[26px] focus-within:border-gray-200 focus-within:bg-white focus-within:shadow-lg transition-all relative z-20 flex flex-col`}>
               <textarea
                 ref={textareaRef}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 placeholder={isNewChat ? "Start a deep research..." : "Ask a follow-up..."}
-                className={`w-full px-4 pt-4 pb-2 bg-transparent border-none resize-none focus:ring-0 max-h-[200px] overflow-y-auto text-gray-900 placeholder:text-gray-500 ${isNewChat ? 'min-h-[52px] text-base' : 'min-h-[40px]'}`}
+                style={{ outline: 'none' }}
+                className={`w-full px-4 pt-4 pb-2 bg-transparent border-none resize-none max-h-[200px] overflow-y-auto text-gray-900 placeholder:text-gray-500 ${isNewChat ? 'min-h-[52px] text-base' : 'min-h-[40px]'}`}
                 rows={1}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
               />

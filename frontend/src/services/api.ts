@@ -27,6 +27,7 @@ export interface SendMessageRequest {
   content: string;
   modelId?: string;
   budget?: 'MEDIUM' | 'HIGH' | 'ULTRA';
+  hitlMode?: 'NONE' | 'DIRECTION_ONLY';  // HITL模式，默认 DIRECTION_ONLY
 }
 
 export interface SendMessageResponse {
@@ -84,6 +85,13 @@ export interface ModelInfo {
   name: string;
   model: string;
   baseUrl?: string;
+}
+
+export type DirectionAction = 'APPROVE' | 'REVISE';
+
+export interface ConfirmDirectionRequest {
+  action: DirectionAction;
+  feedback?: string;  // REVISE 时的修改意见
 }
 
 export interface AddModelRequest {
@@ -218,5 +226,21 @@ export const researchApi = {
     return response.data.data;
   },
   
-  getSseUrl: () => `${RESEARCH_BASE_URL}/sse`
+  getSseUrl: () => `${RESEARCH_BASE_URL}/sse`,
+
+  confirmDirection: async (researchId: string, req: ConfirmDirectionRequest): Promise<SendMessageResponse> => {
+    const response = await researchClient.post<Result<SendMessageResponse>>(`/${researchId}/direction-action`, req);
+    if (response.data.code !== 0) {
+      throw new Error(response.data.message || '方向确认操作失败');
+    }
+    return response.data.data;
+  },
+
+  cancelResearch: async (researchId: string): Promise<SendMessageResponse> => {
+    const response = await researchClient.post<Result<SendMessageResponse>>(`/${researchId}/cancel`);
+    if (response.data.code !== 0) {
+      throw new Error(response.data.message || '取消失败');
+    }
+    return response.data.data;
+  },
 };

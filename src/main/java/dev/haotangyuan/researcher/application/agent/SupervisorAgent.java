@@ -10,6 +10,7 @@ import dev.haotangyuan.researcher.application.agent.runtime.ResearchChatResponse
 import dev.haotangyuan.researcher.application.agent.runtime.ResearchMessage;
 import dev.haotangyuan.researcher.application.data.WorkflowStatus;
 import dev.haotangyuan.researcher.application.model.ModelHandler;
+import dev.haotangyuan.researcher.domain.mapper.ResearchSessionMapper;
 import dev.haotangyuan.researcher.application.state.DeepResearchState;
 import dev.haotangyuan.researcher.infra.data.EventType;
 import dev.haotangyuan.researcher.infra.exception.WorkflowException;
@@ -46,6 +47,7 @@ public class SupervisorAgent {
     private final ResearcherAgent researcherAgent;
     private final EventPublisher eventPublisher;
     private final ResearchObservation researchObservation;
+    private final ResearchSessionMapper researchSessionMapper;
 
     public void run(DeepResearchState state) {
         state.setStatus(WorkflowStatus.IN_RESEARCH);
@@ -58,6 +60,14 @@ public class SupervisorAgent {
                 .build();
         List<ResearchTask> tasks = planResearchTasks(agent, state);
         List<ResearchResult> results = executeResearchTasks(tasks, state);
+
+        // 执行完成后检查是否已被取消，避免发布"准备生成报告"的误导性事件
+        if (isCancelled(state.getResearchId())) {
+            log.info("研究已被取消，SupervisorAgent 停止 researchId={}", state.getResearchId());
+            state.setStatus(WorkflowStatus.CANCELLED);
+            return;
+        }
+
         summarizeSupervisorResults(results, state);
     }
 
@@ -222,6 +232,19 @@ public class SupervisorAgent {
                 "title", result.title(),
                 "topic", result.researchTopic(),
                 "findings", result.findings() == null ? "" : result.findings()));
+    }
+
+    /**
+     * 检查研究是否已被用户取消
+     */
+    private boolean isCancelled(String researchId) {
+        try {
+            var session = researchSessionMapper.selectById(researchId);
+            return session != null && WorkflowStatus.CANCELLED.equals(session.getStatus());
+        } catch (Exception e) {
+            log.warn("检查取消状态失败 researchId={}", researchId, e);
+            return false;
+        }
     }
 
     private static String textValue(JsonNode node, String fieldName) {

@@ -2,14 +2,14 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AlertCircle, Bot, CheckCircle2, Clock, Coins, Copy, Loader2, RefreshCw, Shield, User, Zap } from 'lucide-react';
-import { researchApi, modelApi, ModelInfo, ChatMessage, WorkflowEvent } from '../services/api';
+import { researchApi, modelApi, ModelInfo, ChatMessage, WorkflowEvent, DirectionAction } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { ModelManagerModal } from '../components/ModelManagerModal';
 import { BUDGET_OPTIONS, BudgetValue } from '../constants/budget';
 import { formatAppDateTime } from '../constants/time';
 
 const MAX_MODELS = 3;
-const ACTIVE_STATUSES = new Set(['PENDING', 'NEW', 'QUEUE', 'START', 'RUNNING', 'IN_SCOPE', 'IN_RESEARCH', 'IN_REPORT']);
+const ACTIVE_STATUSES = new Set(['PENDING', 'NEW', 'QUEUE', 'START', 'RUNNING', 'IN_SCOPE', 'AWAITING_DIRECTION_CONFIRM', 'IN_RESEARCH', 'IN_REPORT']);
 const TERMINAL_STATUSES = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
 
 function sortEventsChronologically(events: WorkflowEvent[] = []) {
@@ -36,6 +36,7 @@ interface ArenaRun {
   totalOutputTokens?: number;
   error?: string | null;
   isSending?: boolean;
+  researchBrief?: string;  // HITL 方向确认时展示的研究摘要
 }
 
 interface ArenaPageProps {
@@ -51,6 +52,7 @@ const STATUS_META: Record<string, StatusMeta> = {
   IN_SCOPE: { label: '规划中', color: 'text-purple-600', bg: 'bg-purple-50' },
   IN_RESEARCH: { label: '调研中', color: 'text-amber-600', bg: 'bg-amber-50' },
   IN_REPORT: { label: '写报告', color: 'text-indigo-600', bg: 'bg-indigo-50' },
+  AWAITING_DIRECTION_CONFIRM: { label: '待确认方向', color: 'text-orange-600', bg: 'bg-orange-50' },
   START: { label: '运行中', color: 'text-blue-600', bg: 'bg-blue-50' },
   QUEUE: { label: '排队中', color: 'text-gray-600', bg: 'bg-gray-100' },
   PENDING: { label: '准备中', color: 'text-gray-600', bg: 'bg-gray-100' },
@@ -126,6 +128,10 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [copiedRunId, setCopiedRunId] = useState<string | null>(null);
 
+  // HITL 方向确认相关状态
+  const [reviseFeedback, setReviseFeedback] = useState<Record<string, string>>({});
+  const [isConfirming, setIsConfirming] = useState<Record<string, boolean>>({});
+
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const pollingTimersRef = useRef<Record<string, number>>({});
   const copyResetTimeoutRef = useRef<number | null>(null);
@@ -146,6 +152,7 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
   const selectedModelInfos = useMemo(() => selectedModelIds.map((id) => modelDictionary[id]).filter(Boolean), [selectedModelIds, modelDictionary]);
 
   const hasActiveRuns = arenaRuns.some((run) => ACTIVE_STATUSES.has((run.status || '').toUpperCase()));
+  const hitlPendingRun = useMemo(() => arenaRuns.find((run) => (run.status || '').toUpperCase() === 'AWAITING_DIRECTION_CONFIRM'), [arenaRuns]);
   const totalRuns = arenaRuns.length;
   const finishedRuns = arenaRuns.filter((run) => TERMINAL_STATUSES.has((run.status || '').toUpperCase())).length;
   const completionPercent = totalRuns ? Math.round((finishedRuns / totalRuns) * 100) : 0;
@@ -166,6 +173,9 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
     try {
       const resp = await researchApi.getMessages(researchId);
       const normalizedEvents = sortEventsChronologically(resp.events || []);
+      // 从 DIRECTION_CONFIRM 事件中提取 researchBrief
+      const directionEvent = normalizedEvents.find(e => e.type === 'DIRECTION_CONFIRM');
+      const researchBrief = directionEvent?.content || undefined;
       setArenaRuns((prev) => prev.map((run) => run.researchId === researchId ? {
         ...run,
         status: resp.status,
@@ -175,12 +185,16 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
         completeTime: resp.completeTime ?? run.completeTime,
         totalInputTokens: resp.totalInputTokens ?? run.totalInputTokens,
         totalOutputTokens: resp.totalOutputTokens ?? run.totalOutputTokens,
+        researchBrief: researchBrief ?? run.researchBrief,
+        isSending: resp.status?.toUpperCase() === 'AWAITING_DIRECTION_CONFIRM' ? false : run.isSending,
         error: null,
       } : run));
       const nextStatus = (resp.status || '').toUpperCase();
       if (!TERMINAL_STATUSES.has(nextStatus)) {
         stopPolling(researchId);
-        pollingTimersRef.current[researchId] = window.setTimeout(() => pollResearch(researchId), 2500);
+        // HITL 确认状态轮询间隔拉长到 5 秒
+        const interval = nextStatus === 'AWAITING_DIRECTION_CONFIRM' ? 5000 : 2500;
+        pollingTimersRef.current[researchId] = window.setTimeout(() => pollResearch(researchId), interval);
       } else {
         stopPolling(researchId);
       }
@@ -321,7 +335,7 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
 
       await Promise.allSettled(runs.map(async (run) => {
         try {
-          await researchApi.sendMessage(run.researchId, content, { modelId: run.modelId, budget: selectedBudget });
+          await researchApi.sendMessage(run.researchId, content, { modelId: run.modelId, budget: selectedBudget, hitlMode: 'DIRECTION_ONLY' });
           setArenaRuns((prev) => prev.map((item) => item.researchId === run.researchId ? { ...item, status: 'RUNNING', isSending: false } : item));
           pollResearch(run.researchId);
         } catch (error) {
@@ -359,6 +373,26 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
     });
   }, []);
 
+  // HITL 方向确认/修改处理
+  const handleConfirmDirection = useCallback(async (run: ArenaRun, action: DirectionAction, feedback?: string) => {
+    setIsConfirming(prev => ({ ...prev, [run.researchId]: true }));
+    try {
+      await researchApi.confirmDirection(run.researchId, { action, feedback });
+      setArenaRuns(prev => prev.map(r => r.researchId === run.researchId
+        ? { ...r, status: 'QUEUE', isSending: true, error: null }
+        : r));
+      setIsConfirming(prev => ({ ...prev, [run.researchId]: false }));
+      // 延迟后重新开始轮询，等 pipeline 恢复
+      setTimeout(() => pollResearch(run.researchId), 1000);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '方向确认失败';
+      setArenaRuns(prev => prev.map(r => r.researchId === run.researchId
+        ? { ...r, error: message }
+        : r));
+      setIsConfirming(prev => ({ ...prev, [run.researchId]: false }));
+    }
+  }, [pollResearch]);
+
   const renderRunCard = (run: ArenaRun) => {
     const statusMeta = getStatusMeta(run.status);
     const report = extractFinalMessage(run.messages);
@@ -387,6 +421,14 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
             <div className="text-sm font-semibold text-gray-900 mt-0.5">{formatDuration(run.startTime, run.completeTime, run.status)}</div>
           </div>
         </div>
+
+        {/* HITL 方向确认提示（简洁版，操作在顶部全局栏） */}
+        {run.status?.toUpperCase() === 'AWAITING_DIRECTION_CONFIRM' && (
+          <div className="mt-4 p-3 rounded-xl border border-orange-200 bg-orange-50 text-xs text-orange-700 flex items-center gap-2">
+            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>等待确认研究方向 — 请在上方操作栏中确认或修改</span>
+          </div>
+        )}
 
         <div className="mt-4 flex-1 flex flex-col">
           <div className="flex items-center justify-between mb-2">
@@ -472,121 +514,68 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
           </div>
         </div>
 
-{/* 运行中：紧凑的一行摘要 */}
-        {arenaRuns.length > 0 ? (
-          <div className="bg-[#f4f4f4] rounded-2xl px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-4 text-sm">
-              <div className="flex items-center gap-2">
-                <Bot className="w-4 h-4 text-gray-500" />
-                <span className="font-medium text-gray-900 max-w-[300px] truncate">{arenaTopic}</span>
-              </div>
-              <div className="h-4 w-px bg-gray-300" />
-              <div className="flex items-center gap-1.5 text-gray-600">
-                <Coins className="w-3.5 h-3.5" />
-                <span>{BUDGET_OPTIONS.find((b) => b.value === selectedBudget)?.label || selectedBudget}</span>
-              </div>
-              <div className="h-4 w-px bg-gray-300" />
-              <div className="flex items-center gap-1.5 text-gray-600">
-                <Zap className="w-3.5 h-3.5 text-amber-500" />
-                <span>{arenaRuns.map((r) => r.modelName).join('、')}</span>
-              </div>
-            </div>
-            <button
-              onClick={() => handleReset()}
-              className="px-4 py-1.5 text-sm rounded-xl border border-gray-300 text-gray-600 hover:bg-gray-100"
-            >
-              清空并重新开始
-            </button>
-          </div>
-        ) : (
-          /* 初始状态：完整输入界面 */
-          <div className="bg-[#f4f4f4] rounded-2xl p-4 border border-transparent focus-within:border-gray-200">
-            {arenaError && (
-              <div className="mb-3 text-sm text-red-600 flex items-center gap-2"><AlertCircle className="w-4 h-4" />{arenaError}</div>
-            )}
-            <textarea
-              value={topicInput}
-              onChange={(e) => setTopicInput(e.target.value)}
-              placeholder="输入想要调研的主题..."
-              className="w-full bg-white rounded-2xl border border-gray-200 p-4 text-sm text-gray-900 min-h-[88px]"
-              disabled={isLaunching}
-            />
-
+{/* 输入区：始终可见 */}
+        <div className="bg-[#f4f4f4] rounded-2xl p-4 border border-transparent">
+          {arenaError && (
+            <div className="mb-3 text-sm text-red-600 flex items-center gap-2"><AlertCircle className="w-4 h-4" />{arenaError}</div>
+          )}
+          <textarea
+            value={topicInput}
+            onChange={(e) => setTopicInput(e.target.value)}
+            placeholder={arenaRuns.length > 0 ? "输入新问题..." : "输入想要调研的主题..."}
+            className="w-full bg-white rounded-2xl border border-gray-200 p-4 text-sm text-gray-900 min-h-[64px]"
+            style={{ outline: 'none' }}
+            disabled={isLaunching}
+            rows={arenaRuns.length > 0 ? 1 : 3}
+          />
+          {arenaRuns.length === 0 && (
             <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4">
               <div className="flex flex-col gap-2">
                 <span className="text-xs font-semibold text-gray-500 flex items-center gap-1"><Coins className="w-3.5 h-3.5" />预算策略</span>
                 <div className="grid grid-cols-3 gap-2">
                   {BUDGET_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      onClick={() => setSelectedBudget(option.value)}
-                      className={`px-3 py-2 rounded-xl text-left border text-sm ${selectedBudget === option.value ? 'bg-black text-white border-black' : 'border-gray-200 text-gray-700 hover:bg-gray-100'}`}
-                    >
+                    <button key={option.value} onClick={() => setSelectedBudget(option.value)}
+                      className={`px-3 py-2 rounded-xl text-left border text-sm ${selectedBudget === option.value ? 'bg-black text-white border-black' : 'border-gray-200 text-gray-700 hover:bg-gray-100'}`}>
                       <span className="font-semibold">{option.label}</span>
                       <span className="block text-[11px] opacity-70">{option.caption}</span>
                     </button>
                   ))}
                 </div>
               </div>
-
               <div className="flex flex-col gap-2 col-span-1 lg:col-span-2">
                 <span className="text-xs font-semibold text-gray-500 flex items-center gap-1"><Zap className="w-3.5 h-3.5 text-amber-500" />模型（最多{MAX_MODELS}个）</span>
                 <div ref={modelMenuRef} className="relative">
-                  <button
-                    onClick={() => setShowModelMenu((prev) => !prev)}
-                    className="w-full flex items-center justify-between px-4 py-3 bg-white border border-gray-200 rounded-2xl text-left"
-                  >
+                  <button onClick={() => setShowModelMenu((prev) => !prev)}
+                    className="w-full flex items-center justify-between px-4 py-3 bg-white border border-gray-200 rounded-2xl text-left">
                     <div>
                       <p className="text-sm font-semibold text-gray-900">{selectedModelInfos.length ? `${selectedModelInfos.length} 个模型已选` : '选择模型'}</p>
-                      <p className="text-xs text-gray-500">
-                        {selectedModelInfos.map((m) => m?.name || m?.model).filter(Boolean).join('，') || '点击展开并挑选模型'}
-                      </p>
+                      <p className="text-xs text-gray-500">{selectedModelInfos.map((m) => m?.name || m?.model).filter(Boolean).join('，') || '点击展开并挑选模型'}</p>
                     </div>
                     <ChevronsDownIcon />
                   </button>
-
                   {showModelMenu && (
                     <div className="absolute z-50 mt-2 w-full bg-white border border-gray-200 rounded-2xl shadow-xl p-4">
                       {[{ key: 'platform', label: '平台内置', icon: <Shield className="w-3.5 h-3.5" />, models: groupedModels.platform }, { key: 'user', label: '我的模型', icon: <User className="w-3.5 h-3.5" />, models: groupedModels.user }].map((section) => (
                         <div key={section.key} className="mb-4 last:mb-0">
-                          <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                            {section.icon}
-                            <span>{section.label}</span>
-                            <span className="text-[10px] text-gray-400">({section.models.length})</span>
-                          </div>
-                          {section.models.length === 0 ? (
-                            <p className="text-xs text-gray-400 mt-1 ml-5">暂无模型</p>
-                          ) : (
-                            <div className="mt-2 space-y-2">
-                              {section.models.map((model) => {
-                                const checked = selectedModelIds.includes(model.id);
-                                const disabled = !checked && selectedModelIds.length >= MAX_MODELS;
-                                return (
-                                  <label key={model.id} className={`flex items-center justify-between gap-2 p-3 border rounded-xl cursor-pointer ${checked ? 'border-black bg-black/5' : 'border-gray-200 hover:border-gray-300'} ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}>
-                                    <div>
-                                      <p className="text-sm font-semibold text-gray-900">{model.name || model.model}</p>
-                                      <p className="text-xs text-gray-500">{model.model}</p>
-                                    </div>
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      disabled={disabled}
-                                      onChange={() => toggleModelSelection(model.id)}
-                                      className="w-4 h-4"
-                                    />
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          )}
+                          <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">{section.icon}<span>{section.label}</span><span className="text-[10px] text-gray-400">({section.models.length})</span></div>
+                          {section.models.length === 0 ? <p className="text-xs text-gray-400 mt-1 ml-5">暂无模型</p>
+                          : <div className="mt-2 space-y-2">
+                            {section.models.map((model) => {
+                              const checked = selectedModelIds.includes(model.id);
+                              const disabled = !checked && selectedModelIds.length >= MAX_MODELS;
+                              return (
+                                <label key={model.id} className={`flex items-center justify-between gap-2 p-3 border rounded-xl cursor-pointer ${checked ? 'border-black bg-black/5' : 'border-gray-200 hover:border-gray-300'} ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}>
+                                  <div><p className="text-sm font-semibold text-gray-900">{model.name || model.model}</p><p className="text-xs text-gray-500">{model.model}</p></div>
+                                  <input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggleModelSelection(model.id)} className="w-4 h-4" />
+                                </label>
+                              );
+                            })}
+                          </div>}
                         </div>
                       ))}
                       <div className="mt-4 space-y-2">
                         {selectedModelIds.length >= MAX_MODELS && <p className="text-xs text-amber-600">已达到选择上限</p>}
-                        <button
-                          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-gray-200 text-sm"
-                          onClick={() => { setShowModelMenu(false); setIsModelManagerOpen(true); }}
-                        >
+                        <button className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-gray-200 text-sm" onClick={() => { setShowModelMenu(false); setIsModelManagerOpen(true); }}>
                           <PlusIcon /> 管理模型
                         </button>
                       </div>
@@ -595,23 +584,34 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
                 </div>
               </div>
             </div>
+          )}
+          <div className="mt-3 flex items-center justify-between">
+            <span className="text-xs text-gray-400">{arenaRuns.length > 0 ? '研究进行中，可输入新问题发起新一轮对比' : '配置主题、预算和模型后即可发起对比'}</span>
+            <button onClick={startArena} disabled={isLaunching || !topicInput.trim() || selectedModelIds.length === 0}
+              className={`px-5 py-2.5 rounded-2xl text-sm font-semibold flex items-center gap-2 ${isLaunching ? 'bg-gray-300 text-gray-500' : 'bg-black text-white hover:bg-gray-900'}`}>
+              {isLaunching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
+              发起对比
+            </button>
+          </div>
+        </div>
 
-            <div className="mt-4 flex items-center justify-between">
-              <div className="text-xs text-gray-500">先在这里配置好主题、预算和模型，点击下方即可触发最多 3 个模型并行深入调研。</div>
-              <button
-                onClick={startArena}
-                disabled={isLaunching || !topicInput.trim() || selectedModelIds.length === 0}
-                className={`px-5 py-2.5 rounded-2xl text-sm font-semibold flex items-center gap-2 ${isLaunching ? 'bg-gray-300 text-gray-500' : 'bg-black text-white hover:bg-gray-900'}`}
-              >
-                {isLaunching ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
-                发起对比
-              </button>
+        {/* 运行中：紧凑摘要 */}
+        {arenaRuns.length > 0 && (
+          <div className="bg-[#f4f4f4] rounded-2xl px-4 py-2 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-4 text-sm">
+              <Bot className="w-4 h-4 text-gray-500" />
+              <span className="font-medium text-gray-900 max-w-[400px] truncate">{arenaTopic}</span>
+              <span className="text-gray-400">|</span>
+              <span className="text-gray-600">{BUDGET_OPTIONS.find((b) => b.value === selectedBudget)?.label || selectedBudget}</span>
+              <span className="text-gray-400">|</span>
+              <span className="text-gray-600">{arenaRuns.map((r) => r.modelName).join('、')}</span>
             </div>
+            <button onClick={() => handleReset()} className="px-4 py-1.5 text-sm rounded-xl border border-gray-300 text-gray-600 hover:bg-gray-100">清空</button>
           </div>
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 py-6 bg-gray-50">
+      <div className="flex-1 overflow-y-auto px-6 py-6 bg-gray-50 pb-40">
         {arenaRuns.length === 0 ? (
           <div className="h-full flex flex-col items-center justify-center text-center text-gray-500">
             <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center shadow mb-4">
@@ -691,6 +691,7 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
                 </table>
               </div>
             </div>
+
           </div>
         )}
       </div>
@@ -702,6 +703,47 @@ export function ArenaPage({ sidebarOpen = true }: ArenaPageProps) {
         onRefresh={() => refreshModelList()}
         onModelCreated={(modelId) => refreshModelList(modelId)}
       />
+
+      {/* HITL 固定底部操作栏：始终悬浮在页面底部，不可错过 */}
+      {hitlPendingRun && (
+        <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 9999, background: '#fff', borderTop: '3px solid #fb923c', boxShadow: '0 -4px 24px rgba(0,0,0,0.15)', padding: '16px 24px' }}>
+          <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
+            <p style={{ fontSize: '14px', fontWeight: 600, color: '#9a3412', marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <AlertCircle className="w-4 h-4" /> 确认研究方向 — {hitlPendingRun.modelName}
+            </p>
+            <p style={{ fontSize: '12px', color: '#4b5563', marginBottom: '12px', maxHeight: '80px', overflowY: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+              {hitlPendingRun.researchBrief || '(研究方向已生成，请确认或修改)'}
+            </p>
+            {isConfirming[hitlPendingRun.researchId] ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', color: '#6b7280', padding: '8px 0' }}>
+                <Loader2 className="w-4 h-4 animate-spin" />正在处理...
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-end' }}>
+                <button
+                  onClick={() => handleConfirmDirection(hitlPendingRun, 'APPROVE')}
+                  style={{ padding: '10px 24px', borderRadius: '12px', background: '#16a34a', color: '#fff', fontSize: '14px', fontWeight: 600, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
+                >
+                  <CheckCircle2 className="w-4 h-4" /> 确认方向，开始研究
+                </button>
+                <textarea
+                  value={reviseFeedback[hitlPendingRun.researchId] || ''}
+                  onChange={(e) => setReviseFeedback(prev => ({ ...prev, [hitlPendingRun.researchId]: e.target.value }))}
+                  placeholder="输入修改意见..."
+                  style={{ flex: 1, padding: '8px 12px', fontSize: '14px', border: '1px solid #d1d5db', borderRadius: '8px', resize: 'none', outline: 'none' }}
+                  rows={2}
+                />
+                <button
+                  onClick={() => handleConfirmDirection(hitlPendingRun, 'REVISE', reviseFeedback[hitlPendingRun.researchId])}
+                  style={{ padding: '10px 20px', borderRadius: '12px', background: '#ea580c', color: '#fff', fontSize: '14px', fontWeight: 600, border: 'none', cursor: 'pointer', flexShrink: 0 }}
+                >
+                  提交修改
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }

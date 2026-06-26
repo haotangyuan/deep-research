@@ -72,6 +72,6 @@ public class SearchPrompts {
             【强制】保持原文引用的准确性，不改写
             </Quality Rules>
 
-            今天的日期是 {date}。
+            今天是 {date}。不要询问用户当前年份或日期。
             """;
 }

@@ -37,7 +37,7 @@ public interface ResearchSessionMapper extends BaseMapper<ResearchSession> {
             UPDATE research_session
             SET status = 'QUEUE', update_time = NOW()
             WHERE id = #{id} AND user_id = #{userId}
-              AND status IN ('NEW', 'NEED_CLARIFICATION')
+              AND status IN ('NEW', 'NEED_CLARIFICATION', 'AWAITING_DIRECTION_CONFIRM', 'CANCELLED')
             """)
     int casUpdateToQueue(@Param("id") String id, @Param("userId") Long userId);
 
@@ -61,4 +61,22 @@ public interface ResearchSessionMapper extends BaseMapper<ResearchSession> {
             AND status NOT IN ('COMPLETED', 'FAILED')
             """)
     int countActiveUsage(@Param("modelId") String modelId);
+
+    /** HITL 方向确认——CAS 更新，保证幂等 */
+    @Update("""
+            UPDATE research_session
+            SET status = 'QUEUE', update_time = NOW()
+            WHERE id = #{id} AND user_id = #{userId}
+              AND status = 'AWAITING_DIRECTION_CONFIRM'
+            """)
+    int casConfirmDirection(@Param("id") String id, @Param("userId") Long userId);
+
+    /** 取消研究中研究——从任意活跃状态改为 CANCELLED */
+    @Update("""
+            UPDATE research_session
+            SET status = 'CANCELLED', complete_time = NOW(), update_time = NOW()
+            WHERE id = #{id} AND user_id = #{userId}
+              AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+            """)
+    int cancelResearch(@Param("id") String id, @Param("userId") Long userId);
 }
