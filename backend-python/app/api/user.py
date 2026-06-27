@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from ..auth import current_user_id
-from ..common import success
-from ..dto import LoginReq, RegisterReq
-from ..services import user_service
+from app.core.auth import current_user_id
+from app.core.common import success
+from app.domain.dto import LoginReq, RegisterReq
+from app.application.services import user_service
 
 router = APIRouter()
 

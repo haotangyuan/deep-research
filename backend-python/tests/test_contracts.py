@@ -9,14 +9,14 @@ import pytest
 import redis as redis_sync
 from fastapi.testclient import TestClient
 
-from app.cache import get_cache, sequence_util
-from app.config import get_settings
-from app.constants import WorkflowStatus
+from app.infrastructure.cache import get_cache, sequence_util
+from app.core.config import get_settings
+from app.core.constants import WorkflowStatus
 from app.main import app
-from app.observability import export_headers, resolved_endpoint, summarize
-from app.agents import ReportAgent
-from app.sse import sse_hub
-from app.state import BudgetSnapshot, DeepResearchState, TraceMetadataModel
+from app.infrastructure.observability import export_headers, resolved_endpoint, summarize
+from app.application.agents import ReportAgent
+from app.infrastructure.sse import sse_hub
+from app.domain.state import BudgetSnapshot, DeepResearchState, TraceMetadataModel
 
 
 def _mysql_conn():

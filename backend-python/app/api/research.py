@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header
 
-from ..auth import current_user_id
-from ..common import success
-from ..dto import ConfirmDirectionReq, SendMessageReq
-from ..services import research_service
-from ..sse import sse_hub
+from app.core.auth import current_user_id
+from app.core.common import success
+from app.domain.dto import ConfirmDirectionReq, SendMessageReq
+from app.application.services import research_service
+from app.infrastructure.sse import sse_hub
 
 router = APIRouter()
 

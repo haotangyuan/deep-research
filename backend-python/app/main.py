@@ -8,12 +8,12 @@ from fastapi.responses import HTMLResponse
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from .api import model, research, user
-from .cache import close_cache, init_cache
-from .common import AppError, failure_response
-from .config import get_settings
-from .db import close_db
-from .observability import init_observability, shutdown_observability
-from .pipeline import research_task_queue
+from app.infrastructure.cache import close_cache, init_cache
+from app.core.common import AppError, failure_response
+from app.core.config import get_settings
+from app.infrastructure.db import close_db
+from app.infrastructure.observability import init_observability, shutdown_observability
+from app.application.pipeline import research_task_queue
 
 
 @asynccontextmanager

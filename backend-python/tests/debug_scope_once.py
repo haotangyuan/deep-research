@@ -4,11 +4,11 @@ import asyncio
 
 import pymysql
 
-from app.llm import AgentScopeChatClient
-from app.models import Model
-from app.prompts import CLARIFY_WITH_USER_INSTRUCTIONS
-from app.runtime import ResearchAgentRequest, ResearchMessage
-from app.timeutil import today_str
+from app.infrastructure.llm import AgentScopeChatClient
+from app.domain.models import Model
+from app.application.prompts import CLARIFY_WITH_USER_INSTRUCTIONS
+from app.domain.runtime import ResearchAgentRequest, ResearchMessage
+from app.core.timeutil import today_str
 
 
 def load_mimo_model() -> Model:
