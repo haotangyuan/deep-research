@@ -44,15 +44,18 @@ public class ResearchTaskExecutor {
     /**
      * 提交研究任务，推送预计执行时间到 SSE
      */
-    public void submit(String researchId, Runnable task) {
-        int queueSize = executor.getThreadPoolExecutor().getQueue().size();
-        int activeCount = executor.getActiveCount();
-        String estimatedTime = calculateEstimatedTime(queueSize, activeCount);
+   public void submit(String researchId, Runnable task) {
+       int queueSize = executor.getThreadPoolExecutor().getQueue().size();
+       int activeCount = executor.getActiveCount();
 
-        try {
-            executor.execute(task);
-            log.info("任务已提交，researchId={}, estimatedTime={}", researchId, estimatedTime);
-            eventPublisher.publishTempEvent(researchId, EventType.QUEUE, "排队中：预计 " + estimatedTime + " 开始执行");
+       try {
+           executor.execute(task);
+            log.info("任务已提交，researchId={}", researchId);
+            // 仅在无空闲线程时才排队，避免误导用户
+            if (activeCount >= asyncProp.getMaxPoolSize()) {
+                String estimatedTime = calculateEstimatedTime(queueSize, activeCount);
+                eventPublisher.publishTempEvent(researchId, EventType.QUEUE, "排队中：预计 " + estimatedTime + " 开始执行");
+            }
         } catch (RejectedExecutionException e) {
             log.warn("任务被拒绝，researchId={}, 队列已满", researchId);
             throw new ResearchException("系统繁忙，请稍后重试");

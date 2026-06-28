@@ -14,8 +14,12 @@ from app.core.config import get_settings
 from app.core.constants import WorkflowStatus
 from app.main import app
 from app.infrastructure.observability import export_headers, resolved_endpoint, summarize
-from app.application.agents import ReportAgent
+from app.application import agents as agents_module
+from app.application.agents import ReportAgent, ScopeAgent
+from app.application.pipeline import should_rebuild_scope_from_latest_user, ResearchTaskQueue
 from app.infrastructure.sse import sse_hub
+from app.domain.models import ResearchSession
+from app.domain.runtime import ResearchAgentRequest, ResearchChatResponse, ResearchMemory, ResearchMessage
 from app.domain.state import BudgetSnapshot, DeepResearchState, TraceMetadataModel
 
 
@@ -187,6 +191,89 @@ def test_state_checkpoint_round_trip() -> None:
     assert restored.research_id == state.research_id
     assert restored.trace_context()["agent.framework"] == "agentscope-python"
     assert restored.supervisor_notes == ["note"]
+
+
+def test_queue_recovery_mode_for_direction_actions() -> None:
+    assert should_rebuild_scope_from_latest_user("修改意见: 缩小范围") is True
+    assert should_rebuild_scope_from_latest_user("请重新调整研究方向") is True
+    assert should_rebuild_scope_from_latest_user("确认研究方向，开始执行研究") is False
+    assert should_rebuild_scope_from_latest_user("普通研究问题") is False
+
+
+def test_queue_recovery_builds_state_from_history() -> None:
+    session_obj = ResearchSession(
+        id=uuid.uuid4().hex,
+        user_id=123,
+        status=WorkflowStatus.QUEUE,
+        model_id="model-1",
+        budget="MEDIUM",
+        total_input_tokens=7,
+        total_output_tokens=11,
+    )
+    settings = get_settings()
+    budget_level = settings.budget_levels()["MEDIUM"]
+    state = ResearchTaskQueue()._new_state_from_history(
+        session_obj,
+        [ResearchMessage.user("研究问题")],
+        "MEDIUM",
+        budget_level,
+    )
+
+    assert state.research_id == session_obj.id
+    assert state.status == WorkflowStatus.QUEUE
+    assert state.chat_history[-1].text == "研究问题"
+    assert state.trace_context()["user.id"] == 123
+    assert state.trace_context()["model.id"] == "model-1"
+    assert state.budget.max_conduct_count == budget_level.max_conduct_count
+    assert state.total_input_tokens == 7
+    assert state.total_output_tokens == 11
+
+
+@pytest.mark.asyncio
+async def test_scope_agent_injects_hitl_revision_as_hard_prompt_constraint(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_prompts: list[str] = []
+
+    class FakeClient:
+        async def run_agent(self, request: ResearchAgentRequest) -> ResearchChatResponse:
+            captured_prompts.append(request.messages[0].text)
+            payload = {"researchBrief": "我想研究指定主题，用户约束为 2020-2022，不扩展到其他年份。"}
+            return ResearchChatResponse(ResearchMessage.assistant(json.dumps(payload, ensure_ascii=False)))
+
+    async def fake_publish_event(*_args, **_kwargs) -> int:
+        return 1
+
+    monkeypatch.setattr(agents_module.model_handler, "get_chat_client", lambda _research_id: FakeClient())
+    monkeypatch.setattr(agents_module.event_publisher, "publish_event", fake_publish_event)
+
+    state = DeepResearchState(
+        research_id=uuid.uuid4().hex,
+        chat_history=[],
+        status=WorkflowStatus.IN_SCOPE,
+        trace_metadata_model=TraceMetadataModel(
+            research_id="rid",
+            user_id=1,
+            model_id="mid",
+            budget_level="MEDIUM",
+            agent_framework="agentscope-python",
+        ),
+        budget=BudgetSnapshot(max_conduct_count=2, max_search_count=2, max_concurrent_units=1),
+        budget_name="MEDIUM",
+        hitl_mode="DIRECTION_ONLY",
+        hitl_feedback="时间范围必须改为 2020-2022，不要包含 2023-2026。",
+    )
+    memory = ResearchMemory(10)
+    memory.add(ResearchMessage.user("研究这个行业在 2023-2026 年的发展。"))
+
+    await ScopeAgent()._write_research_brief(memory, state)
+
+    assert captured_prompts
+    prompt = captured_prompts[0]
+    assert '<HumanRevision priority="highest">' in prompt
+    assert "时间范围必须改为 2020-2022" in prompt
+    assert "覆盖历史消息、旧研究简报或旧确认消息" in prompt
+    assert "不得扩展、近似或改写" in prompt
+    assert "近2-3年" in prompt
+    assert state.research_brief == "我想研究指定主题，用户约束为 2020-2022，不扩展到其他年份。"
 
 
 def test_observability_langfuse_config_and_sanitization(monkeypatch: pytest.MonkeyPatch) -> None:

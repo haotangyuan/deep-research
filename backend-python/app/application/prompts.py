@@ -5,6 +5,7 @@ CLARIFY_WITH_USER_INSTRUCTIONS = """
 <Messages>
 {messages}
 </Messages>
+{hitl_feedback_section}
 </Context>
 
 <Decision Criteria>
@@ -31,16 +32,57 @@ CLARIFY_WITH_USER_INSTRUCTIONS = """
 <Output Schema>
 输出严格的 JSON，不含 Markdown 代码块：
 
-{{
-  "needClarification": true/false,
-  "question": "澄清问题（needClarification=true 时填写）",
-  "verification": "确认消息（needClarification=false 时填写）"
-}}
+**基础字段**（必填）：
+- `needClarification`: true/false
+- `question`: 简短说明文字，作为表单前的引导语
+- `verification`: 无需澄清时的确认消息
 
-needClarification = true 时：
+**可选字段**：
+- `clarificationForm`: 当有 2 个以上明确问题或需要用户选择时填写，包含：
+  - `title`: 表单标题（如"研究范围澄清"）
+  - `questions[]`: 问题列表，每个问题包含：
+    - `id`: 问题编号（如"q1"、"q2"）
+    - `type`: "multi_choice"（多选题）或 "open_ended"（问答题）
+    - `text`: 问题文字
+    - `options`: 选项列表（仅 multi_choice 类型需要），2-4 个具体选项
+    - `allowOther`: 是否显示"其他"输入框（仅 multi_choice 类型，可选，默认 false）
+
+**表单使用指导**：
+- 有 2+ 个具体问题、或需要用户从选项中选择时，使用结构化表单
+- 纯开放式单一问题时，用 question 字段直接提问即可，不需要表单
+- open_ended 问题最多 1-2 个
+- "其他"选项用于选项列表无法覆盖所有可能的情况
+- 不要在 options 列表里写"其他"——设置 allowOther: true 会自动添加"其他"输入框
+- question 字段作为表单上方的说明文字，简要说明需要用户做什么
+
+**结构化表单示例**：
 {{
   "needClarification": true,
-  "question": "您提到的「XX」具体指什么？请选择或说明：1. 选项A 2. 选项B 3. 其他",
+  "question": "为了准确开展研究，请选择或填写以下信息：",
+  "verification": "",
+  "clarificationForm": {{
+    "title": "研究范围澄清",
+    "questions": [
+      {{
+        "id": "q1",
+        "type": "multi_choice",
+        "text": "您关注的具体方面是？",
+        "options": ["技术原理", "市场应用", "行业趋势", "政策法规"],
+        "allowOther": true
+      }},
+      {{
+        "id": "q2",
+        "type": "open_ended",
+        "text": "是否有其他需要特别说明的要求？"
+      }}
+    ]
+  }}
+}}
+
+**简单提问示例**（不需要表单）：
+{{
+  "needClarification": true,
+  "question": "您提到的「XX」具体指什么？请选择一个方向：1. 技术架构 2. 商业模式 3. 其他",
   "verification": ""
 }}
 
@@ -63,6 +105,7 @@ TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT = """
 <Messages>
 {messages}
 </Messages>
+{hitl_feedback_section}
 </Context>
 
 <Task>
@@ -100,6 +143,11 @@ TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT = """
 
 **原则5：时间范围**
 - 如用户未指定，添加合理的时间范围建议
+
+**原则6：人工修改意见优先**
+- 如果 Context 中存在 HumanRevision，必须把它作为最高优先级约束
+- HumanRevision 与历史消息、旧研究简报或旧确认消息冲突时，以 HumanRevision 为准
+- HumanRevision 指定了时间范围时，必须原样落实到用户约束中，不得扩展、近似或改写成"近几年"、"近2-3年"、"最近"等相对范围
 </Writing Principles>
 
 <Output Schema>

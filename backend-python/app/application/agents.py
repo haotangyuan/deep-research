@@ -54,7 +54,11 @@ class ScopeAgent:
         await self._write_research_brief(memory, state)
 
     async def _clarify_user_instructions(self, memory: ResearchMemory, state: DeepResearchState) -> None:
-        prompt = CLARIFY_WITH_USER_INSTRUCTIONS.format(messages=render_messages(memory.messages()), date=today_str())
+        prompt = CLARIFY_WITH_USER_INSTRUCTIONS.format(
+            messages=render_messages(memory.messages()),
+            hitl_feedback_section=self._hitl_feedback_section(state),
+            date=today_str(),
+        )
         response = await model_handler.get_chat_client(state.research_id).run_agent(
             ResearchAgentRequest.text_only(
                 "ScopeAgent",
@@ -79,6 +83,16 @@ class ScopeAgent:
                     state.current_scope_event_id,
                 )
                 await event_publisher.publish_message(state.research_id, "assistant", question)
+                # 发布结构化澄清表单（如果 LLM 有生成的话）
+                clarification_form = clarify.get("clarificationForm")
+                if clarification_form and isinstance(clarification_form, dict):
+                    await event_publisher.publish_event(
+                        state.research_id,
+                        EventType.CLARIFY_FORM,
+                        str(clarification_form.get("title") or "研究范围澄清"),
+                        json.dumps(clarification_form, ensure_ascii=False),
+                        state.current_scope_event_id,
+                    )
             else:
                 verification = str(clarify.get("verification") or "")
                 memory.add(ResearchMessage.assistant(verification))
@@ -96,6 +110,7 @@ class ScopeAgent:
     async def _write_research_brief(self, memory: ResearchMemory, state: DeepResearchState) -> None:
         prompt = TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT.format(
             messages=render_messages(memory.messages()),
+            hitl_feedback_section=self._hitl_feedback_section(state),
             date=today_str(),
         )
         response = await model_handler.get_chat_client(state.research_id).run_agent(
@@ -122,6 +137,19 @@ class ScopeAgent:
             state.research_brief = research_brief
         except Exception:
             state.status = WorkflowStatus.FAILED
+
+    @staticmethod
+    def _hitl_feedback_section(state: DeepResearchState) -> str:
+        feedback = (state.hitl_feedback or "").strip()
+        if not feedback:
+            return ""
+        return (
+            "<HumanRevision priority=\"highest\">\n"
+            "用户在研究方向确认环节提出了修改意见。生成新的研究简报时，必须让这些修改意见覆盖历史消息、旧研究简报或旧确认消息中的冲突内容。\n"
+            "如果修改意见指定了时间范围，必须严格使用该范围，不得扩展、近似或改写为相对时间表达。\n"
+            f"{feedback}\n"
+            "</HumanRevision>"
+        )
 
 
 class SupervisorAgent:
@@ -409,13 +437,26 @@ class SearchAgent:
             if result.url and result.url not in unique:
                 unique[result.url] = result
         state.search_results = unique
+        search_event_content = self._format_search_event_content(list(unique.values()))
         await event_publisher.publish_event(
             state.research_id,
             EventType.SEARCH,
             f"找到 {len(unique)} 个相关结果",
-            None,
+            search_event_content,
             state.current_search_event_id,
         )
+
+    @staticmethod
+    def _format_search_event_content(results: list[TavilySearchResult]) -> str | None:
+        if not results:
+            return None
+        lines: list[str] = []
+        for index, result in enumerate(results, start=1):
+            title = (result.title or "Untitled source").replace("\n", " ").strip()
+            url = (result.url or "").strip()
+            snippet = truncate((result.content or result.raw_content or "").replace("\n", " ").strip(), 180)
+            lines.append(f"{index}. {title}\nURL: {url}\n{snippet}".strip())
+        return "\n\n".join(lines)
 
     async def _action(self, state: DeepResearchState) -> None:
         if not state.search_results:
