@@ -8,11 +8,11 @@ from app.core.auth import generate_token
 from app.infrastructure.cache import get_cache
 from app.core.common import ModelError, ResearchError, UserError
 from app.core.config import get_settings
-from app.core.constants import WorkflowStatus
+from app.core.constants import EventType, WorkflowStatus
 from app.infrastructure.db import SessionLocal
+from app.infrastructure.events import event_publisher
 from app.domain.dto import (
     AddModelReq,
-    ChatMessageDTO,
     ConfirmDirectionReq,
     CreateResearchResp,
     LoginReq,
@@ -24,7 +24,6 @@ from app.domain.dto import (
     SendMessageReq,
     SendMessageResp,
     UserInfoResp,
-    WorkflowEventDTO,
 )
 from app.infrastructure.llm import model_handler
 from app.domain.models import ChatMessage, Model, ResearchSession, User
@@ -203,6 +202,9 @@ class ResearchService:
         return ResearchMessageResp(
             id=session_obj.id,
             status=session_obj.status,
+            title=session_obj.title,
+            model_id=session_obj.model_id,
+            budget=session_obj.budget,
             messages=messages,
             events=events,
             start_time=session_obj.start_time,
@@ -287,6 +289,7 @@ class ResearchService:
         else:
             msg = "修改意见: " + req.feedback if req.feedback else "请重新调整研究方向"
             await get_cache().save_message(research_id, "user", msg)
+            state.chat_history.append(ResearchMessage.user(msg))
             state.skip_scope_phase = False
             state.hitl_feedback = req.feedback
             state.status = WorkflowStatus.QUEUE
@@ -311,8 +314,9 @@ class ResearchService:
             await session.commit()
             if result.rowcount == 0:
                 raise ResearchError("取消失败，研究已完成或不存在")
-        await get_cache().save_message(research_id, "user", "用户取消了本次研究")
-        await get_cache().save_message(research_id, "assistant", "研究已取消")
+        await event_publisher.publish_event(research_id, EventType.ERROR, "研究已取消", None)
+        await event_publisher.publish_message(research_id, "user", "用户取消了本次研究")
+        await event_publisher.publish_message(research_id, "assistant", "研究已取消")
         return SendMessageResp(id=research_id, content="研究已取消")
 
     async def _load_db_messages(self, research_id: str) -> list[ResearchMessage]:

@@ -112,6 +112,7 @@ class WorkflowEventDTO(CamelModel):
     type: str
     title: str
     content: str | None = None
+    form_data: dict[str, Any] | None = None
     parent_event_id: int | None = None
     sequence_no: int | None = None
     create_time: datetime | None = None
@@ -145,6 +146,9 @@ class TimelineItem(CamelModel):
 class ResearchMessageResp(CamelModel):
     id: str
     status: str
+    title: str | None = None
+    model_id: str | None = None
+    budget: str | None = None
     messages: list[ChatMessageDTO]
     events: list[WorkflowEventDTO]
     start_time: datetime | None = None
@@ -157,6 +161,9 @@ class ResearchMessageResp(CamelModel):
         return {
             "id": self.id,
             "status": self.status,
+            "title": self.title,
+            "modelId": self.model_id,
+            "budget": self.budget,
             "messages": [item.api_dump() for item in self.messages],
             "events": [item.api_dump() for item in self.events],
             "startTime": format_datetime(self.start_time),

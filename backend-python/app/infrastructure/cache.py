@@ -113,11 +113,17 @@ class CacheUtil:
             session.add(event)
             await session.commit()
             await session.refresh(event)
+            form_data = None
+            if event_type == "CLARIFY_FORM" and content:
+                try:
+                    form_data = loads(content)
+                except Exception:
+                    pass
             item = TimelineItem(
                 kind=KIND_EVENT,
                 research_id=research_id,
                 sequence_no=seq,
-                event=WorkflowEventDTO.model_validate(event),
+                event=WorkflowEventDTO.model_validate({**event.__dict__, "form_data": form_data}),
             )
         await self.write_to_redis(research_id, [item])
         return item
@@ -191,12 +197,18 @@ class CacheUtil:
                     ),
                 )
             for event in events_result.scalars():
+                form_data = None
+                if event.type == "CLARIFY_FORM" and event.content:
+                    try:
+                        form_data = loads(event.content)
+                    except Exception:
+                        pass
                 items.append(
                     TimelineItem(
                         kind=KIND_EVENT,
                         research_id=research_id,
                         sequence_no=event.sequence_no,
-                        event=WorkflowEventDTO.model_validate(event),
+                        event=WorkflowEventDTO.model_validate({**event.__dict__, "form_data": form_data}),
                     ),
                 )
         return sorted(items, key=lambda item: item.sequence_no)

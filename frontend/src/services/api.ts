@@ -56,12 +56,26 @@ export interface ChatMessage {
   createTime: string;
 }
 
+export interface ClarificationQuestion {
+  id: string;
+  type: 'multi_choice' | 'open_ended';
+  text: string;
+  options?: string[];
+  allowOther?: boolean;
+}
+
+export interface ClarificationForm {
+  title?: string;
+  questions: ClarificationQuestion[];
+}
+
 export interface WorkflowEvent {
   id: number;
   researchId: string;
-  type: string; // e.g., 'SCOPE', 'SUPERVISOR', 'RESEARCHER'
+  type: string; // e.g., 'SCOPE', 'SUPERVISOR', 'RESEARCHER', 'CLARIFY_FORM'
   title: string;
   content: string;
+  formData?: ClarificationForm;
   parentEventId?: number;
   sequenceNo?: number;
   createTime: string;
@@ -70,6 +84,9 @@ export interface WorkflowEvent {
 export interface ResearchMessageResponse {
   id: string;
   status: string;
+  title?: string;
+  modelId?: string;
+  budget?: string;
   messages: ChatMessage[];
   events: WorkflowEvent[];
   startTime?: string;

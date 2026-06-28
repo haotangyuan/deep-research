@@ -50,6 +50,7 @@ async def main() -> None:
     client = AgentScopeChatClient(load_mimo_model())
     prompt = CLARIFY_WITH_USER_INSTRUCTIONS.format(
         messages="USER: 请用中文简要研究 FastAPI 与 Spring Boot 在小型项目中的差异，最终报告控制在 300 字以内。",
+        hitl_feedback_section="",
         date=today_str(),
     )
     response = await client.run_agent(

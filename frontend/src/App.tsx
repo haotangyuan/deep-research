@@ -1,15 +1,18 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams, Link, useLocation } from 'react-router-dom';
-import { Plus, Loader2, Send, AlertCircle, Sparkles, Search, Brain, Globe, FileSearch, Zap, User, Bot, CheckCircle2, ChevronDown, PanelLeftClose, PanelLeftOpen, MessageSquare, Clock, Coins, ChevronsUpDown, RefreshCw, Shield, Copy } from 'lucide-react';
+import { Plus, Loader2, Send, AlertCircle, Sparkles, Search, Brain, Globe, FileSearch, Zap, User, Bot, CheckCircle2, PanelLeftClose, PanelLeftOpen, MessageSquare, Clock, Coins, ChevronsUpDown, Copy } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
-import { researchApi, modelApi, ResearchStatusResponse, ChatMessage, WorkflowEvent, ModelInfo, SendMessageRequest, DirectionAction } from './services/api';
+import { researchApi, modelApi, ResearchStatusResponse, ChatMessage, WorkflowEvent, ModelInfo, SendMessageRequest, DirectionAction, ResearchMessageResponse } from './services/api';
 import { getToken } from './services/auth';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/AuthModal';
 import { UserMenu } from './components/UserMenu';
 import { ModelManagerModal } from './components/ModelManagerModal';
+import { AgentFlowPanel } from './components/agent-flow/AgentFlowPanel';
+import { AI_Prompt, type AnimatedAIInputOption } from './components/ui/animated-ai-input';
+import { useAnimatedText } from './components/ui/animated-text';
 import { BUDGET_OPTIONS, BudgetValue } from './constants/budget';
 import ArenaPage from './pages/ArenaPage';
 
@@ -78,6 +81,7 @@ function getEventStyle(type: string) {
     case 'RESEARCH': return { icon: Search, color: 'text-blue-600', bg: 'bg-blue-50' };
     case 'SEARCH': return { icon: Globe, color: 'text-green-600', bg: 'bg-green-50' };
     case 'REPORT': return { icon: FileSearch, color: 'text-orange-600', bg: 'bg-orange-50' };
+    case 'CLARIFY_FORM': return { icon: MessageSquare, color: 'text-amber-600', bg: 'bg-amber-50' };
     case 'ERROR': return { icon: AlertCircle, color: 'text-red-600', bg: 'bg-red-50' };
     default: return { icon: Zap, color: 'text-gray-600', bg: 'bg-gray-50' };
   }
@@ -124,6 +128,44 @@ type HistoryUpdateDetail = {
   title?: string;
 };
 
+function messageKey(message: ChatMessage) {
+  return `msg-${message.id}`;
+}
+
+function eventKey(event: WorkflowEvent) {
+  if (event.id !== undefined && event.id !== null) return `evt-${event.id}`;
+  if (event.sequenceNo !== undefined && event.sequenceNo !== null && event.sequenceNo >= 0) return `evt-seq-${event.sequenceNo}`;
+  return `evt-${event.type}-${event.createTime}-${event.title}`;
+}
+
+function latestTimelineSequence(messages: ChatMessage[] = [], events: WorkflowEvent[] = []) {
+  const sequences = [
+    ...messages.map((message) => message.sequenceNo),
+    ...events.map((event) => event.sequenceNo),
+  ].filter((value): value is number => typeof value === 'number' && value >= 0);
+  return sequences.length ? Math.max(...sequences) : undefined;
+}
+
+function sortTimelineRecords<T extends { sequenceNo?: number; createTime: string }>(items: T[]) {
+  return [...items].sort((a, b) => {
+    const seqA = typeof a.sequenceNo === 'number' && a.sequenceNo >= 0 ? a.sequenceNo : Number.POSITIVE_INFINITY;
+    const seqB = typeof b.sequenceNo === 'number' && b.sequenceNo >= 0 ? b.sequenceNo : Number.POSITIVE_INFINITY;
+    if (seqA !== seqB) return seqA - seqB;
+    return new Date(a.createTime).getTime() - new Date(b.createTime).getTime();
+  });
+}
+
+function mergeTimelineRecords<T extends { sequenceNo?: number; createTime: string }>(
+  existing: T[],
+  incoming: T[],
+  keyOf: (item: T) => string,
+) {
+  const merged = new Map<string, T>();
+  existing.forEach((item) => merged.set(keyOf(item), item));
+  incoming.forEach((item) => merged.set(keyOf(item), item));
+  return sortTimelineRecords([...merged.values()]);
+}
+
 const REFRESH_HISTORY_EVENT = 'refreshHistory';
 const HISTORY_UPDATE_EVENT = 'historyStatusUpdate';
 
@@ -136,6 +178,84 @@ const ACTIVE_HISTORY_STATUSES = new Set([
   'IN_RESEARCH',
   'IN_REPORT',
 ]);
+
+const LIVE_SSE_STATUSES = new Set([
+  'QUEUE',
+  'START',
+  'RUNNING',
+  'IN_SCOPE',
+  'IN_RESEARCH',
+  'IN_REPORT',
+]);
+
+function shouldConnectLiveSse(status?: string) {
+  return LIVE_SSE_STATUSES.has((status || '').toUpperCase());
+}
+
+function getStatusTone(status?: string) {
+  switch (status?.toUpperCase()) {
+    case 'COMPLETED':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    case 'FAILED':
+    case 'CANCELLED':
+      return 'border-red-200 bg-red-50 text-red-700';
+    case 'NEED_CLARIFICATION':
+    case 'AWAITING_DIRECTION_CONFIRM':
+      return 'border-amber-200 bg-amber-50 text-amber-700';
+    case 'QUEUE':
+    case 'START':
+    case 'RUNNING':
+    case 'IN_SCOPE':
+    case 'IN_RESEARCH':
+    case 'IN_REPORT':
+      return 'border-blue-200 bg-blue-50 text-blue-700';
+    default:
+      return 'border-gray-200 bg-gray-50 text-gray-600';
+  }
+}
+
+function getStatusDot(status?: string) {
+  switch (status?.toUpperCase()) {
+    case 'COMPLETED':
+      return 'bg-emerald-500';
+    case 'FAILED':
+    case 'CANCELLED':
+      return 'bg-red-500';
+    case 'NEED_CLARIFICATION':
+    case 'AWAITING_DIRECTION_CONFIRM':
+      return 'bg-amber-500';
+    case 'QUEUE':
+    case 'START':
+    case 'RUNNING':
+    case 'IN_SCOPE':
+    case 'IN_RESEARCH':
+    case 'IN_REPORT':
+      return 'bg-blue-500';
+    default:
+      return 'bg-gray-300';
+  }
+}
+
+function formatDuration(startTime?: string, completeTime?: string) {
+  if (!startTime || !completeTime) return null;
+  const start = new Date(startTime);
+  const end = new Date(completeTime);
+  const diffMs = end.getTime() - start.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffSecs = Math.floor((diffMs % 60000) / 1000);
+  return diffMins > 0 ? `${diffMins}分${diffSecs}秒` : `${diffSecs}秒`;
+}
+
+function MessageMarkdown({ content, animateText = false }: { content: string; animateText?: boolean }) {
+  const animatedContent = useAnimatedText(animateText ? content : '', ' ');
+  const displayContent = animateText ? animatedContent : content;
+
+  return (
+    <div className="prose prose-zinc prose-sm max-w-none text-[14px] leading-7 prose-headings:font-semibold prose-headings:text-gray-950 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-1 prose-pre:my-3 prose-pre:rounded-xl prose-pre:border prose-pre:border-gray-200 prose-pre:bg-gray-950 prose-code:rounded-md prose-code:bg-gray-100 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[0.85em] prose-code:font-medium prose-pre:prose-code:bg-transparent prose-pre:prose-code:p-0">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
+    </div>
+  );
+}
 
 // --- Components ---
 
@@ -236,62 +356,99 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
   const isArenaActive = location.pathname.startsWith('/arena');
 
   return (
-    <aside className={`bg-gray-50 border-r border-gray-200 flex flex-col shrink-0 transition-all duration-300 ease-in-out ${isOpen ? 'w-72 translate-x-0' : 'w-0 -translate-x-full opacity-0 overflow-hidden border-r-0'}`}>
-      <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-        <h1 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-          <div className="w-8 h-8 bg-black rounded-lg flex items-center justify-center">
-            <Bot className="w-5 h-5 text-white" />
+    <aside className={`flex shrink-0 flex-col border-r border-gray-200/80 bg-[#f7f8f5] transition-all duration-300 ease-in-out ${isOpen ? 'w-72 translate-x-0' : 'w-0 -translate-x-full overflow-hidden border-r-0 opacity-0'}`}>
+      <div className="border-b border-gray-200/80 px-4 py-4">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gray-950 text-white shadow-sm">
+              <Bot className="h-5 w-5" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="truncate text-[15px] font-semibold tracking-tight text-gray-950">Deep Research</h1>
+              <p className="truncate text-[11px] font-medium text-gray-500">research workspace</p>
+            </div>
           </div>
-          Deep Research
-        </h1>
-        <button onClick={toggle} className="p-1 hover:bg-gray-200 rounded-md text-gray-500">
-            <PanelLeftClose className="w-5 h-5" />
-        </button>
+          <button
+            onClick={toggle}
+            className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-white hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900/10"
+            aria-label="收起侧边栏"
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
+        </div>
       </div>
-      
-      <div className="p-3 space-y-2">
+
+      <nav className="space-y-2 px-3 py-3">
         <button
           onClick={() => navigate('/new')}
-          className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-black text-white text-sm font-medium rounded-lg hover:bg-gray-800 transition-colors"
+          className="flex h-10 w-full items-center justify-center gap-2 rounded-xl bg-gray-950 px-4 text-sm font-semibold text-white shadow-sm shadow-gray-900/10 transition-all hover:-translate-y-0.5 hover:bg-gray-800 active:translate-y-0"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="h-4 w-4" />
           New Research
         </button>
         <button
           onClick={() => navigate('/arena')}
-          className={`w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition-colors ${isArenaActive ? 'bg-white border-black text-black' : 'border-gray-200 text-gray-700 hover:bg-gray-100'}`}
+          className={`flex h-10 w-full items-center justify-center gap-2 rounded-xl border px-4 text-sm font-semibold transition-all ${
+            isArenaActive
+              ? 'border-gray-300 bg-white text-gray-950 shadow-sm'
+              : 'border-transparent text-gray-600 hover:border-gray-200 hover:bg-white hover:text-gray-950'
+          }`}
         >
-          <Zap className="w-4 h-4" />
+          <Zap className="h-4 w-4" />
           LLM Arena
         </button>
-      </div>
+      </nav>
 
-      <div className="flex-1 overflow-y-auto px-3">
-        <div className="py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">History</div>
+      <div className="flex-1 overflow-y-auto px-3 pb-3">
+        <div className="flex items-center justify-between px-1 py-3">
+          <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-500">History</span>
+          <span className="rounded-md bg-white px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-gray-500 shadow-sm">
+            {history.length}
+          </span>
+        </div>
         {loading ? (
-          <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
+          <div className="space-y-2">
+            {[0, 1, 2, 3].map((item) => (
+              <div key={item} className="rounded-xl bg-white/70 p-3 shadow-sm">
+                <div className="h-3 w-4/5 animate-pulse rounded bg-gray-200" />
+                <div className="mt-2 h-2.5 w-1/2 animate-pulse rounded bg-gray-100" />
+              </div>
+            ))}
+          </div>
+        ) : history.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-gray-300 bg-white/60 p-4 text-sm text-gray-500">
+            暂无研究记录
+          </div>
         ) : (
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             {history.map((item) => {
               const modelInfo = item.modelId ? modelDictionary[item.modelId] : null;
               const modelDisplayName = modelInfo?.name || modelInfo?.model || null;
+              const active = currentId === item.id;
               return (
                 <Link
                   key={item.id}
                   to={`/research/${item.id}`}
-                  className={`w-full text-left px-3 py-2 rounded-lg transition-colors block ${
-                    currentId === item.id ? 'bg-gray-200 text-gray-900' : 'text-gray-600 hover:bg-gray-100'
+                  className={`group relative block rounded-xl px-3 py-3 text-left transition-all ${
+                    active
+                      ? 'bg-white text-gray-950 shadow-sm ring-1 ring-gray-200'
+                      : 'text-gray-600 hover:bg-white/80 hover:text-gray-950'
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium truncate">{item.title || 'Untitled'}</div>
-                      {modelDisplayName && (
-                        <div className="text-[11px] text-gray-400 truncate mt-0.5">{modelDisplayName}</div>
-                      )}
-                    </div>
-                    <div className="shrink-0 mt-0.5">
-                      {getStatusIcon(item.status)}
+                  {active && <span className="absolute left-0 top-3 h-8 w-1 rounded-r-full bg-gray-950" />}
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-1 h-2 w-2 shrink-0 rounded-full ${getStatusDot(item.status)}`} />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="truncate text-[13px] font-semibold leading-5">{item.title || 'Untitled'}</div>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${getStatusTone(item.status)}`}>
+                          {getStatusIcon(item.status)}
+                          {getStatusLabel(item.status)}
+                        </span>
+                        {modelDisplayName && (
+                          <span className="truncate text-[11px] text-gray-500">{modelDisplayName}</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </Link>
@@ -301,8 +458,7 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
         )}
       </div>
 
-      {/* User menu at bottom */}
-      <div className="p-3 border-t border-gray-200">
+      <div className="border-t border-gray-200/80 p-3">
         <UserMenu />
       </div>
     </aside>
@@ -335,9 +491,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
   const [modelList, setModelList] = useState<ModelInfo[]>([]);
   const [modelListLoading, setModelListLoading] = useState(false);
   const [selectedModelId, setSelectedModelId] = useState('');
-  const [showModelMenu, setShowModelMenu] = useState(false);
   const [isModelManagerOpen, setIsModelManagerOpen] = useState(false);
-  const selectedModelInfo = useMemo(() => modelList.find(m => m.id === selectedModelId), [modelList, selectedModelId]);
   const refreshModelList = useCallback(async (nextSelectedId?: string) => {
     if (!isAuthenticated) {
       setModelList([]);
@@ -367,10 +521,6 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
       setModelListLoading(false);
     }
   }, [isAuthenticated]);
-  const groupedModels = useMemo(() => ({
-    platform: modelList.filter((m) => m.type === 'GLOBAL'),
-    user: modelList.filter((m) => m.type === 'USER'),
-  }), [modelList]);
   const modelDictionary = useMemo(() => {
     const map: Record<string, ModelInfo> = {};
     modelList.forEach((model) => {
@@ -378,6 +528,14 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
     });
     return map;
   }, [modelList]);
+  const inputModelOptions = useMemo<AnimatedAIInputOption[]>(() => (
+    modelList.map((model) => ({
+      value: model.id,
+      label: model.name || model.model,
+      caption: model.model,
+      type: model.type,
+    }))
+  ), [modelList]);
   
   // Budget state
   const [selectedBudget, setSelectedBudget] = useState<BudgetValue>('HIGH');
@@ -395,12 +553,25 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
     return dirEvent?.content || null;
   }, [currentResearch?.status, currentResearch?.events]);
 
+  // 澄清表单状态
+  const clarifyFormFromEvents = useMemo(() => {
+    if (currentResearch?.status !== 'NEED_CLARIFICATION') return null;
+    const formEvent = [...(currentResearch?.events || [])]
+      .reverse()
+      .find(e => e.type === 'CLARIFY_FORM' && e.formData);
+    return formEvent?.formData || null;
+  }, [currentResearch?.status, currentResearch?.events]);
+  const [clarifyFormAnswers, setClarifyFormAnswers] = useState<Record<string, string[] | string>>({});
+  const [clarifyOtherInputs, setClarifyOtherInputs] = useState<Record<string, string>>({});
+  const [isClarifySubmitting, setIsClarifySubmitting] = useState(false);
+  const [clarifyTextInput, setClarifyTextInput] = useState("");
+  const [isClarifyTextSubmitting, setIsClarifyTextSubmitting] = useState(false);
+
+
   const abortControllerRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);  // 取消标记，阻止残余 SSE 事件
   const processedIdsRef = useRef<Set<string>>(new Set());
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const modelMenuRef = useRef<HTMLDivElement>(null);
   const lastEventIdMapRef = useRef<Record<string, string | undefined>>({});
   const activeResearchRef = useRef<string | null>(null);
   const shouldAutoReconnectRef = useRef(false);
@@ -438,25 +609,6 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
       chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [currentResearch?.messages, currentResearch?.events, viewState]);
-
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      const newHeight = Math.min(textareaRef.current.scrollHeight, 200); // Limit auto-grow height check
-      textareaRef.current.style.height = newHeight + 'px';
-    }
-  }, [inputValue]);
-
-  // Close model menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (modelMenuRef.current && !modelMenuRef.current.contains(event.target as Node)) {
-        setShowModelMenu(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -577,43 +729,56 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
     }
   }, [id, prepareDraftResearch]);
 
-  const syncResearchStatus = useCallback(async (researchId: string) => {
-    try {
-      const statusResp = await researchApi.getStatus(researchId);
-      let hasChanged = false;
-      setCurrentResearch(prev => {
-        if (!prev || prev.id !== researchId) return prev;
-        const nextTitle = statusResp.title || prev.title;
-        const nextModel = statusResp.modelId || prev.modelId;
-        if (prev.status !== statusResp.status || prev.title !== nextTitle || prev.modelId !== nextModel) {
-          hasChanged = true;
+  const applyResearchSnapshot = useCallback((researchId: string, data: ResearchMessageResponse) => {
+    const messages = data.messages || [];
+    const events = data.events || [];
+    messages.forEach((message) => processedIdsRef.current.add(messageKey(message)));
+    events.forEach((event) => processedIdsRef.current.add(eventKey(event)));
+
+    const latestSequence = latestTimelineSequence(messages, events);
+    if (latestSequence !== undefined) {
+      lastEventIdMapRef.current[researchId] = String(latestSequence);
+    }
+
+    setCurrentResearch(prev => {
+      if (!prev || prev.id !== researchId) return prev;
+      return {
+        ...prev,
+        messages: mergeTimelineRecords(prev.messages, messages, messageKey),
+        events: mergeTimelineRecords(prev.events, events, eventKey),
+        status: data.status || prev.status,
+        title: data.title || prev.title,
+        modelId: data.modelId || prev.modelId,
+        budget: data.budget ?? prev.budget,
+        totalInputTokens: data.totalInputTokens ?? prev.totalInputTokens,
+        totalOutputTokens: data.totalOutputTokens ?? prev.totalOutputTokens,
+        startTime: data.startTime ?? prev.startTime,
+        completeTime: data.completeTime ?? prev.completeTime,
+      };
+    });
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent<HistoryUpdateDetail>(HISTORY_UPDATE_EVENT, {
+        detail: {
+          id: researchId,
+          status: data.status,
+          title: data.title || undefined,
         }
-        return {
-          ...prev,
-          status: statusResp.status,
-          title: nextTitle,
-          modelId: nextModel,
-          budget: statusResp.budget ?? prev.budget,
-          startTime: statusResp.startTime ?? prev.startTime,
-          completeTime: statusResp.completeTime ?? prev.completeTime,
-          totalInputTokens: statusResp.totalInputTokens ?? prev.totalInputTokens,
-          totalOutputTokens: statusResp.totalOutputTokens ?? prev.totalOutputTokens,
-        };
-      });
-      if (hasChanged && typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent<HistoryUpdateDetail>(HISTORY_UPDATE_EVENT, {
-          detail: {
-            id: researchId,
-            status: statusResp.status,
-            title: statusResp.title || undefined,
-          }
-        }));
-        window.dispatchEvent(new Event(REFRESH_HISTORY_EVENT));
-      }
-    } catch (error) {
-      console.error('同步研究状态失败', error);
+      }));
+      window.dispatchEvent(new Event(REFRESH_HISTORY_EVENT));
     }
   }, []);
+
+  const syncResearchSnapshot = useCallback(async (researchId: string) => {
+    try {
+      const data = await researchApi.getMessages(researchId);
+      applyResearchSnapshot(researchId, data);
+      return data;
+    } catch (error) {
+      console.error('同步研究快照失败', error);
+      return null;
+    }
+  }, [applyResearchSnapshot]);
 
   const beginResearchLoad = (researchId: string) => {
     const token = Symbol('research-load');
@@ -679,13 +844,18 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
         }
         newState.messages = msgData.messages;
         newState.events = msgData.events;
+        newState.status = msgData.status || newState.status;
         newState.startTime = msgData.startTime;
         newState.completeTime = msgData.completeTime;
         newState.totalInputTokens = msgData.totalInputTokens;
         newState.totalOutputTokens = msgData.totalOutputTokens;
         
-        msgData.messages.forEach(m => processedIdsRef.current.add(`msg-${m.id}`));
-        msgData.events.forEach(e => processedIdsRef.current.add(`evt-${e.id}`));
+        msgData.messages.forEach(m => processedIdsRef.current.add(messageKey(m)));
+        msgData.events.forEach(e => processedIdsRef.current.add(eventKey(e)));
+        const latestSequence = latestTimelineSequence(msgData.messages, msgData.events);
+        if (latestSequence !== undefined) {
+          lastEventIdMapRef.current[researchId] = String(latestSequence);
+        }
         
         if (!isLatestResearchLoad(researchId, loadToken)) {
           return;
@@ -693,12 +863,11 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
         setCurrentResearch(newState);
         setViewState(status.status === 'FAILED' ? 'failed' : 'chat');
         
-        if (status.status !== 'FAILED' && status.status !== 'COMPLETED') {
+        if (shouldConnectLiveSse(newState.status)) {
           if (!isLatestResearchLoad(researchId, loadToken)) {
             return;
           }
-          delete lastEventIdMapRef.current[researchId];
-          connectSSE(researchId, { resetCursor: true });
+          connectSSE(researchId);
         }
       }
     } catch (e) {
@@ -776,25 +945,9 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
           lastEventIdMapRef.current[researchId] = msg.id;
         }
         if (msg.data?.startsWith('[DONE]')) {
-          syncResearchStatus(researchId);
-          researchApi.getMessages(researchId).then(data => {
-            if (data.messages) {
-              data.messages.forEach((m: ChatMessage) => processedIdsRef.current.add(`msg-${m.id}`));
-            }
-            if (data.events) {
-              data.events.forEach((e: WorkflowEvent) => processedIdsRef.current.add(`evt-${e.id}`));
-            }
-            setCurrentResearch(prev => prev && prev.id === researchId ? {
-              ...prev,
-              messages: data.messages || prev.messages,
-              events: data.events || prev.events,
-              status: data.status || prev.status,
-              totalInputTokens: data.totalInputTokens || prev.totalInputTokens,
-              totalOutputTokens: data.totalOutputTokens || prev.totalOutputTokens,
-              startTime: data.startTime || prev.startTime,
-              completeTime: data.completeTime || prev.completeTime,
-            } : prev);
-          }).catch(() => {});
+          shouldAutoReconnectRef.current = false;
+          setIsConnected(false);
+          syncResearchSnapshot(researchId);
           return;
        }
         try {
@@ -802,19 +955,19 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
           
           if (data.kind === 'event' && data.event) {
             const evt = data.event as WorkflowEvent;
-            const key = `evt-${evt.id}`;
+            const key = eventKey(evt);
             if (!processedIdsRef.current.has(key)) {
               processedIdsRef.current.add(key);
-              setCurrentResearch(prev => prev ? { ...prev, events: [...prev.events, evt] } : prev);
+              setCurrentResearch(prev => prev ? { ...prev, events: mergeTimelineRecords(prev.events, [evt], eventKey) } : prev);
+              syncResearchSnapshot(researchId);
             }
           } else if (data.kind === 'message' && data.message) {
             const chatMsg = data.message as ChatMessage;
-            const key = `msg-${chatMsg.id}`;
+            const key = messageKey(chatMsg);
             if (!processedIdsRef.current.has(key)) {
               processedIdsRef.current.add(key);
-              setCurrentResearch(prev => prev ? { ...prev, messages: [...prev.messages, chatMsg] } : prev);
-              // 只在收到 message 时刷新状态（状态变化通常伴随消息）
-              syncResearchStatus(researchId);
+              setCurrentResearch(prev => prev ? { ...prev, messages: mergeTimelineRecords(prev.messages, [chatMsg], messageKey) } : prev);
+              syncResearchSnapshot(researchId);
             }
           }
         } catch (e) {
@@ -826,7 +979,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
         scheduleReconnect();
       }
     });
-  }, [clientId, syncResearchStatus]);
+  }, [clientId, syncResearchSnapshot]);
 
   // HITL 方向确认处理（在 connectSSE 之后定义，避免循环引用）
   const handleHitlConfirm = useCallback(async (action: DirectionAction, feedback?: string) => {
@@ -838,14 +991,87 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
       setIsHitlConfirming(false);
       setHitlReviseFeedback('');
       setCurrentResearch(prev => prev ? { ...prev, status: 'RUNNING' } : prev);
-      // 同时拉取最新状态，再连接 SSE 接收后续推送
-      syncResearchStatus(currentResearch.id);
-      connectSSE(currentResearch.id, { resetCursor: true });
+      const snapshot = await syncResearchSnapshot(currentResearch.id);
+      if (shouldConnectLiveSse(snapshot?.status)) {
+        connectSSE(currentResearch.id);
+      }
     } catch (e: any) {
       console.error('方向确认失败', e);
       setIsHitlConfirming(false);
     }
-  }, [currentResearch, connectSSE, syncResearchStatus]);
+  }, [currentResearch, connectSSE, syncResearchSnapshot]);
+
+  // 澄清表单处理
+  const handleClarifyCheckboxChange = (questionId: string, option: string, checked: boolean) => {
+    setClarifyFormAnswers(prev => {
+      const current = (prev[questionId] as string[]) || [];
+      if (checked) return { ...prev, [questionId]: [...current, option] };
+      return { ...prev, [questionId]: current.filter(o => o !== option) };
+    });
+  };
+
+  const handleClarifyOtherChange = (questionId: string, value: string) => {
+    setClarifyOtherInputs(prev => ({ ...prev, [questionId]: value }));
+  };
+
+  const handleClarifyOpenEndedChange = (questionId: string, value: string) => {
+    setClarifyFormAnswers(prev => ({ ...prev, [questionId]: value }));
+  };
+
+  const handleClarifySubmit = useCallback(async () => {
+    if (!currentResearch || !clarifyFormFromEvents) return;
+    setIsClarifySubmitting(true);
+    
+    const lines: string[] = [];
+    for (const q of clarifyFormFromEvents.questions) {
+      const answer = clarifyFormAnswers[q.id];
+      if (q.type === 'multi_choice') {
+        const selected = (answer as string[]) || [];
+        const otherText = clarifyOtherInputs[q.id];
+        const parts = selected.filter(o => o !== '其他');
+        if (otherText?.trim()) parts.push(`其他：${otherText.trim()}`);
+        if (parts.length > 0) lines.push(`Q: ${q.text} 答：${parts.join('，')}`);
+      } else {
+        const value = (answer as string) || '';
+        if (value.trim()) lines.push(`Q: ${q.text} 答：${value.trim()}`);
+      }
+    }
+    
+    const compiledText = lines.join('\n') || '用户已提交澄清表单';
+    
+    try {
+      await researchApi.sendMessage(currentResearch.id, compiledText);
+      setIsClarifySubmitting(false);
+      setClarifyFormAnswers({});
+      setClarifyOtherInputs({});
+      setCurrentResearch(prev => prev ? { ...prev, status: 'RUNNING' } : prev);
+      const snapshot = await syncResearchSnapshot(currentResearch.id);
+      if (shouldConnectLiveSse(snapshot?.status)) {
+        connectSSE(currentResearch.id);
+      }
+    } catch (e: any) {
+      setIsClarifySubmitting(false);
+      setError(e.message || '提交失败');
+    }
+  }, [currentResearch, clarifyFormFromEvents, clarifyFormAnswers, clarifyOtherInputs, connectSSE, syncResearchSnapshot]);
+  const handleClarifyTextSubmit = useCallback(async () => {
+    if (!currentResearch || !clarifyTextInput.trim()) return;
+    setIsClarifyTextSubmitting(true);
+    try {
+      await researchApi.sendMessage(currentResearch.id, clarifyTextInput.trim());
+      setClarifyTextInput("");
+      setCurrentResearch(prev => prev ? { ...prev, status: "RUNNING" } : prev);
+      const snapshot = await syncResearchSnapshot(currentResearch.id);
+      if (shouldConnectLiveSse(snapshot?.status)) {
+        connectSSE(currentResearch.id);
+      }
+    } catch (e: any) {
+      setError("提交回答失败");
+    } finally {
+      setIsClarifyTextSubmitting(false);
+    }
+  }, [currentResearch, clarifyTextInput, connectSSE, syncResearchSnapshot]);
+
 
   // 取消研究中研究
   const handleCancelResearch = useCallback(async () => {
@@ -856,11 +1082,11 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
       await researchApi.cancelResearch(currentResearch.id);
       setCurrentResearch(prev => prev ? { ...prev, status: 'CANCELLED' } : prev);
       disconnectSSE();
-      syncResearchStatus(currentResearch.id);
+      syncResearchSnapshot(currentResearch.id);
     } catch (e: any) {
       setError(e.message || '取消失败');
     }
-  }, [currentResearch, disconnectSSE, syncResearchStatus]);
+  }, [currentResearch, disconnectSSE, syncResearchSnapshot]);
 
   const sendMessage = async () => {
     if (!inputValue.trim()) return;
@@ -903,6 +1129,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
 
         connectSSE(newId, { resetCursor: true });
         await researchApi.sendMessage(newId, content, modelConfig);
+        syncResearchSnapshot(newId);
         navigate(`/research/${newId}`);
       } catch (e: any) {
         setError(e.message || 'Failed to start research');
@@ -949,6 +1176,10 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
 
     try {
       await researchApi.sendMessage(currentResearch.id, content, modelConfig);
+      const snapshot = await syncResearchSnapshot(currentResearch.id);
+      if (shouldConnectLiveSse(snapshot?.status)) {
+        connectSSE(currentResearch.id);
+      }
     } catch (e: any) {
       setError(e.message || 'Failed to send message');
     }
@@ -991,90 +1222,82 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
 
   return (
     <>
-    <main className="flex-1 flex flex-col overflow-hidden bg-white relative">
+    <div className="flex h-full min-h-0 flex-1 overflow-hidden">
+    <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-[#fbfbf8]">
       {viewState === 'loading' && !currentResearch && (
-        <div className="flex-1 flex items-center justify-center">
-            <Loader2 className="w-8 h-8 animate-spin text-gray-400" />
+        <div className="flex flex-1 items-center justify-center">
+          <div className="rounded-2xl border border-gray-200 bg-white px-5 py-4 shadow-sm">
+            <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+          </div>
         </div>
       )}
       
       {/* Header for Existing Chat */}
       {!isNewChat && currentResearch && (
-        <div className={`px-6 py-3 border-b border-gray-100 bg-white z-10 shrink-0 transition-all duration-300 ${!sidebarOpen ? 'pl-16' : ''}`}>
-          <div className="flex justify-between items-start">
-            <div>
-              <h2 className="text-lg font-bold text-gray-900">{currentResearch.title}</h2>
-              <div className="flex items-center gap-3 mt-1 flex-wrap">
-                <div className="flex items-center gap-1.5">
-                  <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 animate-pulse' : 'bg-gray-300'}`} />
-                  <span className="text-xs text-gray-500">{getStatusLabel(currentResearch.status)}</span>
+        <div className={`z-10 shrink-0 border-b border-gray-200/70 bg-[#fbfbf8]/90 px-6 py-4 backdrop-blur transition-all duration-300 ${!sidebarOpen ? 'pl-16' : ''}`}>
+          <div className="mx-auto flex max-w-5xl items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h2 className="truncate text-[17px] font-semibold tracking-tight text-gray-950">{currentResearch.title}</h2>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <div className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium ${getStatusTone(currentResearch.status)}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${isConnected ? 'animate-pulse bg-emerald-500' : getStatusDot(currentResearch.status)}`} />
+                  {getStatusLabel(currentResearch.status)}
                 </div>
                 {currentResearch.modelId && (
-                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                    <Brain className="w-3 h-3" />
+                  <div className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600">
+                    <Brain className="h-3 w-3" />
                     <span>
                       模型：{modelDictionary[currentResearch.modelId]?.name || modelDictionary[currentResearch.modelId]?.model || currentResearch.modelId}
                     </span>
                   </div>
                 )}
                 {currentResearch.budget && (
-                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                    <Coins className="w-3 h-3" />
+                  <div className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600">
+                    <Coins className="h-3 w-3" />
                     <span>预算：{BUDGET_OPTIONS.find(b => b.value === currentResearch.budget)?.label || currentResearch.budget}</span>
                   </div>
                 )}
-                {/* Token stats */}
                 {(currentResearch.totalInputTokens || currentResearch.totalOutputTokens) && (
-                  <div className="flex items-center gap-3 text-xs text-gray-500">
-                    <span className="flex items-center gap-1">
-                      <Coins className="w-3 h-3" />
+                  <div className="inline-flex items-center gap-2 rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium tabular-nums text-gray-600">
+                    <span className="flex items-center gap-1.5">
+                      <Coins className="h-3 w-3" />
                       <span>输入: {(currentResearch.totalInputTokens || 0).toLocaleString()}</span>
                     </span>
-                    <span className="flex items-center gap-1">
+                    <span className="flex items-center gap-1.5">
                       <span>输出: {(currentResearch.totalOutputTokens || 0).toLocaleString()}</span>
                     </span>
                   </div>
                 )}
-                {/* Duration */}
                 {currentResearch.startTime && currentResearch.completeTime && (
-                  <div className="flex items-center gap-1 text-xs text-gray-500">
-                    <Clock className="w-3 h-3" />
-                    <span>
-                      {(() => {
-                        const start = new Date(currentResearch.startTime!);
-                        const end = new Date(currentResearch.completeTime!);
-                        const diffMs = end.getTime() - start.getTime();
-                        const diffMins = Math.floor(diffMs / 60000);
-                        const diffSecs = Math.floor((diffMs % 60000) / 1000);
-                        return diffMins > 0 ? `${diffMins}分${diffSecs}秒` : `${diffSecs}秒`;
-                      })()}
-                    </span>
+                  <div className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600">
+                    <Clock className="h-3 w-3" />
+                    <span>{formatDuration(currentResearch.startTime, currentResearch.completeTime)}</span>
                   </div>
                 )}
               </div>
             </div>
             {/* Cancel / Expand buttons */}
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               {currentResearch && !['COMPLETED', 'FAILED', 'CANCELLED', 'NEED_CLARIFICATION'].includes(currentResearch.status) && (
                 <button
                   onClick={handleCancelResearch}
-                  className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition-colors"
+                  className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2 text-sm font-semibold text-red-700 transition-colors hover:bg-red-100"
                   title="取消研究"
                 >
-                  <AlertCircle className="w-4 h-4" />
+                  <AlertCircle className="h-4 w-4" />
                   <span>取消</span>
                 </button>
               )}
               <button
                 onClick={() => setAllEventsExpanded(!allEventsExpanded)}
-                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
+                className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold transition-colors ${
                   allEventsExpanded
-                    ? 'bg-gray-900 text-white hover:bg-gray-800'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    ? 'bg-gray-950 text-white hover:bg-gray-800'
+                    : 'border border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
                 }`}
                 title={allEventsExpanded ? '收起所有事件详情' : '展开所有事件详情'}
               >
-                <ChevronsUpDown className="w-4 h-4" />
+                <ChevronsUpDown className="h-4 w-4" />
                 <span>{allEventsExpanded ? '收起详情' : '展开详情'}</span>
               </button>
             </div>
@@ -1082,71 +1305,195 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
         </div>
       )}
 
-      <div className="flex-1 flex flex-col overflow-hidden relative">
+      <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {!isNewChat && (
-          <div className="flex-1 overflow-y-auto p-6 space-y-8 scroll-smooth">
+          <div className="flex-1 space-y-7 overflow-y-auto px-6 py-8 scroll-smooth">
             {timelineItems.map((item, idx) => {
               if (item.type === 'message') {
                 const isUser = item.data.role === 'user';
                 const isReport = !isUser && idx === timelineItems.length - 1 && currentResearch?.status === 'COMPLETED';
-                
+                const isLatestAssistant = !isUser && idx === timelineItems.length - 1 && currentResearch?.status !== 'COMPLETED';
+
                 if (isReport) {
                   return (
                     <div
                       key={`msg-${item.data.id}`}
                       ref={(el) => { if (el) finalReportRef.current = el; }}
-                      className="max-w-4xl mx-auto w-full"
+                      className="mx-auto w-full max-w-4xl"
                     >
-                      <div className="bg-white border border-gray-200 rounded-2xl p-8 shadow-sm">
-                        <div className="flex items-center gap-2 mb-6 pb-4 border-b border-gray-100">
-                          <FileSearch className="w-5 h-5 text-black" />
-                          <span className="font-bold text-lg">Final Report</span>
+                      <div className="rounded-[1.35rem] border border-gray-200 bg-white p-8 shadow-sm shadow-gray-200/60">
+                        <div className="mb-6 flex items-center gap-2 border-b border-gray-100 pb-4">
+                          <FileSearch className="h-5 w-5 text-gray-950" />
+                          <span className="text-lg font-semibold tracking-tight text-gray-950">Final Report</span>
                         </div>
-                        <article className="prose prose-gray max-w-none">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.data.content}</ReactMarkdown>
+                        <article>
+                          <MessageMarkdown content={item.data.content} />
                         </article>
                       </div>
                     </div>
                   );
                 }
-                // 检测是否是 HITL 方向确认消息（最后一条 assistant 消息 + 状态为 AWAITING_DIRECTION_CONFIRM）
-                const isHitlMessage = !isUser && currentResearch?.status === 'AWAITING_DIRECTION_CONFIRM' && idx === timelineItems.length - 1;
-                return (
-                  <div key={`msg-${item.data.id}`} className={`flex gap-4 ${isUser ? 'flex-row-reverse' : ''}`}>
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${isUser ? 'bg-black text-white' : 'bg-gray-200 text-gray-600'}`}>
-                      {isUser ? <User className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
-                    </div>
-                    <div className={`flex items-start gap-2 max-w-full ${isUser ? 'flex-row-reverse' : ''}`}>
-                      <div className={`max-w-2xl px-5 py-3 rounded-2xl ${isUser ? 'bg-gray-100 text-gray-900 rounded-tr-none' : 'bg-white border border-gray-200 text-gray-800 rounded-tl-none shadow-sm'}`}>
-                        <div className="whitespace-pre-wrap text-sm">
-                          {isUser ? item.data.content : <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.data.content}</ReactMarkdown>}
+
+                const isClarifyMessage = !isUser && currentResearch?.status === 'NEED_CLARIFICATION' && idx === timelineItems.length - 1 && !!clarifyFormFromEvents;
+
+                if (isClarifyMessage && clarifyFormFromEvents) {
+                  return (
+                    <div key={`msg-${item.data.id}`} className="mx-auto flex w-full max-w-4xl gap-3">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 shadow-sm">
+                        <Bot className="h-4 w-4" />
+                      </div>
+                      <div className="w-full max-w-3xl">
+                        <div className="mb-3 rounded-2xl rounded-tl-md border border-gray-200 bg-white px-5 py-4 shadow-sm shadow-gray-200/60">
+                          <MessageMarkdown content={item.data.content} animateText={isLatestAssistant} />
                         </div>
-                        {/* HITL 方向确认按钮：嵌入在 AI 消息框底部 */}
+                        <div className="rounded-2xl border border-gray-200 bg-white px-6 py-5 shadow-sm shadow-gray-200/60">
+                          <h3 className="mb-4 text-sm font-semibold text-gray-950">
+                            {clarifyFormFromEvents.title || '请完善以下信息'}
+                          </h3>
+                          <div className="space-y-5">
+                            {clarifyFormFromEvents.questions.map((q) => {
+                              if (q.type === 'multi_choice') {
+                                const selectedOptions = (clarifyFormAnswers[q.id] as string[]) || [];
+                                return (
+                                  <div key={q.id}>
+                                    <p className="mb-2 text-sm font-medium text-gray-800">{q.text}</p>
+                                    <div className="space-y-2">
+                                      {(q.options || []).map((opt) => {
+                                        const isOtherOption = opt === '其他';
+                                        return (
+                                          <label
+                                            key={opt}
+                                            className={`flex cursor-pointer items-center gap-2.5 rounded-xl border px-3 py-2.5 transition-colors ${
+                                              selectedOptions.includes(opt)
+                                                ? 'border-gray-950 bg-gray-950/[0.04]'
+                                                : 'border-gray-200 bg-gray-50/50 hover:border-gray-300 hover:bg-white'
+                                            }`}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              checked={selectedOptions.includes(opt)}
+                                              onChange={(e) => handleClarifyCheckboxChange(q.id, opt, e.target.checked)}
+                                              className="h-4 w-4 rounded border-gray-300 text-gray-950 focus:ring-gray-950"
+                                            />
+                                            <span className="text-sm text-gray-700">{opt}</span>
+                                            {isOtherOption && (
+                                              <input
+                                                type="text"
+                                                value={clarifyOtherInputs[q.id] || ''}
+                                                onChange={(e) => handleClarifyOtherChange(q.id, e.target.value)}
+                                                placeholder="请填写..."
+                                                className="ml-2 flex-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm focus:border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-950/5"
+                                              />
+                                            )}
+                                          </label>
+                                        );
+                                      })}
+                                      {q.allowOther && !(q.options || []).some(opt => opt === '其他') && (
+                                        <label
+                                          className={`flex cursor-pointer items-center gap-2.5 rounded-xl border px-3 py-2.5 transition-colors ${
+                                            clarifyOtherInputs[q.id]
+                                              ? 'border-gray-950 bg-gray-950/[0.04]'
+                                              : 'border-gray-200 bg-gray-50/50 hover:border-gray-300 hover:bg-white'
+                                          }`}
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={!!clarifyOtherInputs[q.id]}
+                                            onChange={(e) => {
+                                              if (!e.target.checked) handleClarifyOtherChange(q.id, '');
+                                            }}
+                                            className="h-4 w-4 rounded border-gray-300 text-gray-950 focus:ring-gray-950"
+                                          />
+                                          <span className="text-sm text-gray-700">其他</span>
+                                          <input
+                                            type="text"
+                                            value={clarifyOtherInputs[q.id] || ''}
+                                            onChange={(e) => handleClarifyOtherChange(q.id, e.target.value)}
+                                            onFocus={() => { if (!clarifyOtherInputs[q.id]) handleClarifyOtherChange(q.id, ' '); }}
+                                            placeholder="请填写..."
+                                            className="ml-2 flex-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm focus:border-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-950/5"
+                                          />
+                                        </label>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div key={q.id}>
+                                  <p className="mb-2 text-sm font-medium text-gray-800">{q.text}</p>
+                                  <textarea
+                                    value={(clarifyFormAnswers[q.id] as string) || ''}
+                                    onChange={(e) => handleClarifyOpenEndedChange(q.id, e.target.value)}
+                                    placeholder="请输入您的回答..."
+                                    rows={3}
+                                    className="w-full resize-none rounded-xl border border-gray-200 bg-gray-50/70 px-4 py-2.5 text-sm placeholder:text-gray-400 transition-colors focus:border-gray-300 focus:bg-white focus:outline-none focus:ring-2 focus:ring-gray-950/5"
+                                  />
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <div className="mt-5 flex justify-end">
+                            <button
+                              onClick={handleClarifySubmit}
+                              disabled={isClarifySubmitting}
+                              className="flex items-center gap-2 rounded-xl bg-gray-950 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-300"
+                            >
+                              {isClarifySubmitting ? (
+                                <><Loader2 className="h-4 w-4 animate-spin" /> 提交中...</>
+                              ) : (
+                                <><Send className="h-4 w-4" /> 提交答案</>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }
+
+                const isHitlMessage = !isUser && currentResearch?.status === 'AWAITING_DIRECTION_CONFIRM' && idx === timelineItems.length - 1;
+                const isNeedClarifyMessage = !isUser && currentResearch?.status === 'NEED_CLARIFICATION' && idx === timelineItems.length - 1 && !clarifyFormFromEvents;
+                return (
+                  <div key={`msg-${item.data.id}`} className={`mx-auto flex w-full max-w-4xl gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
+                    <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl shadow-sm ${isUser ? 'bg-gray-950 text-white' : 'border border-gray-200 bg-white text-gray-600'}`}>
+                      {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                    </div>
+                    <div className={`flex max-w-full items-start gap-2 ${isUser ? 'flex-row-reverse' : ''}`}>
+                      <div className={`max-w-3xl rounded-2xl px-5 py-4 ${
+                        isUser
+                          ? 'rounded-tr-md bg-gray-950 text-white shadow-sm shadow-gray-900/10'
+                          : 'rounded-tl-md border border-gray-200 bg-white text-gray-800 shadow-sm shadow-gray-200/60'
+                      }`}>
+                        <div className={isUser ? 'whitespace-pre-wrap text-sm leading-6 text-white' : ''}>
+                          {isUser ? item.data.content : <MessageMarkdown content={item.data.content} animateText={isLatestAssistant} />}
+                        </div>
                         {isHitlMessage && hitlResearchBrief && (
-                          <div className="mt-4 pt-3 border-t border-orange-200">
+                          <div className="mt-4 border-t border-amber-200 pt-3">
                             {isHitlConfirming ? (
-                              <div className="flex items-center gap-2 text-sm text-gray-500 py-2">
-                                <Loader2 className="w-4 h-4 animate-spin" />正在处理...
+                              <div className="flex items-center gap-2 py-2 text-sm text-gray-500">
+                                <Loader2 className="h-4 w-4 animate-spin" />正在处理...
                               </div>
                             ) : (
                               <div className="space-y-2">
                                 <button
                                   onClick={() => handleHitlConfirm('APPROVE')}
-                                  className="w-full px-4 py-2.5 rounded-xl bg-green-600 text-white text-sm font-semibold hover:bg-green-700 transition-colors flex items-center justify-center gap-2"
+                                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700"
                                 >
-                                  <CheckCircle2 className="w-4 h-4" /> 确认方向，开始研究
+                                  <CheckCircle2 className="h-4 w-4" /> 确认方向，开始研究
                                 </button>
-                                <div className="flex gap-2 items-start">
+                                <div className="flex items-start gap-2">
                                   <textarea
                                     value={hitlReviseFeedback}
                                     onChange={(e) => setHitlReviseFeedback(e.target.value)}
                                     placeholder="输入修改意见..."
-                                    style={{ flex: 1, padding: '8px 12px', fontSize: '14px', border: '1px solid #d1d5db', borderRadius: '8px', resize: 'none', outline: 'none' }}
                                     rows={2}
+                                    className="min-w-0 flex-1 resize-none rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-2 text-sm text-gray-900 outline-none transition-colors placeholder:text-gray-400 focus:border-gray-300 focus:bg-white focus:ring-2 focus:ring-gray-950/5"
                                   />
                                   <button
                                     onClick={() => handleHitlConfirm('REVISE', hitlReviseFeedback)}
-                                    className="px-5 py-2 rounded-xl bg-orange-600 text-white text-sm font-semibold hover:bg-orange-700 transition-colors flex-shrink-0"
+                                    className="shrink-0 rounded-xl bg-amber-600 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-700"
                                   >
                                     提交修改
                                   </button>
@@ -1156,217 +1503,122 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
                           </div>
                         )}
                       </div>
+                      {isNeedClarifyMessage && (
+                        <div className="mt-4 border-t border-gray-200 pt-3">
+                          {isClarifyTextSubmitting ? (
+                            <div className="flex items-center gap-2 py-2 text-sm text-gray-500">
+                              <Loader2 className="h-4 w-4 animate-spin" />正在处理...
+                            </div>
+                          ) : (
+                            <div className="flex items-start gap-2">
+                              <textarea
+                                value={clarifyTextInput}
+                                onChange={(e) => setClarifyTextInput(e.target.value)}
+                                placeholder="输入您的回答..."
+                                rows={2}
+                                className="min-w-0 flex-1 resize-none rounded-xl border border-gray-200 bg-gray-50/70 px-3 py-2 text-sm outline-none transition-colors placeholder:text-gray-400 focus:border-gray-300 focus:bg-white focus:ring-2 focus:ring-gray-950/5"
+                              />
+                              <button
+                                onClick={handleClarifyTextSubmit}
+                                disabled={!clarifyTextInput.trim() || isClarifyTextSubmitting}
+                                className="shrink-0 rounded-xl bg-gray-950 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-gray-800 disabled:cursor-not-allowed disabled:bg-gray-300"
+                              >
+                                {isClarifyTextSubmitting ? (
+                                  <><Loader2 className="h-4 w-4 animate-spin" /> 提交中...</>
+                                ) : (
+                                  <><Send className="h-4 w-4" /> 提交回答</>
+                                )}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       {renderCopyButton(item.data, isUser)}
                     </div>
                   </div>
                 );
-              } else {
-                const flattenEvents = flattenTree(item.events);
-                if (flattenEvents.length === 0) return null;
-                return (
-                  <div key={`group-${idx}`} className="flex gap-0 w-full">
-                    <div className="w-8 shrink-0 flex justify-center">
-                        <div className="w-0.5 bg-gray-200 h-full rounded-full" />
-                    </div>
-                    <div className="flex-1 -ml-4 space-y-2 py-2">
-                      {flattenEvents.map((evt) => {
-                        const style = getEventStyle(evt.type);
-                        const Icon = style.icon;
-                        return (
-                          <div key={evt.id} className="relative pl-4" style={{ marginLeft: evt.depth * 20 }}>
-                            <div className={`absolute -left-[5px] top-1 w-2.5 h-2.5 rounded-full border-2 border-white ${style.bg.replace('bg-', 'bg-').replace('50', '400')}`} />
-                            {evt.content && evt.content !== evt.title ? (
-                              <details className="group" open={allEventsExpanded}>
-                                <summary className="flex items-start gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
-                                  <div className={`p-1.5 rounded-lg ${style.bg} ${style.color} shrink-0`}><Icon className="w-3.5 h-3.5" /></div>
-                                  <div className="text-sm font-medium text-gray-900 group-hover:text-gray-600">{evt.title}</div>
-                                </summary>
-                                <div className="ml-10 mt-1 text-xs text-gray-500 font-mono bg-gray-50 p-2 rounded border border-gray-100 whitespace-pre-wrap break-all">{evt.content}</div>
-                              </details>
-                            ) : (
-                              <div className="flex items-start gap-2">
-                                <div className={`p-1.5 rounded-lg ${style.bg} ${style.color} shrink-0`}><Icon className="w-3.5 h-3.5" /></div>
-                                <div className="text-sm font-medium text-gray-900">{evt.title}</div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
               }
+
+              const flattenEvents = flattenTree(item.events);
+              if (flattenEvents.length === 0) return null;
+              return (
+                <div key={`group-${idx}`} className="mx-auto flex w-full max-w-4xl gap-0">
+                  <div className="flex w-9 shrink-0 justify-center">
+                    <div className="h-full w-px rounded-full bg-gray-200" />
+                  </div>
+                  <div className="-ml-4 flex-1 space-y-2 py-2">
+                    {flattenEvents.map((evt) => {
+                      const style = getEventStyle(evt.type);
+                      const Icon = style.icon;
+                      return (
+                        <div key={evt.id} className="relative pl-4" style={{ marginLeft: evt.depth * 20 }}>
+                          <div className={`absolute -left-[5px] top-1 h-2.5 w-2.5 rounded-full border-2 border-[#fbfbf8] ${style.bg.replace('bg-', 'bg-').replace('50', '400')}`} />
+                          {evt.content && evt.content !== evt.title ? (
+                            <details className="group rounded-xl" open={allEventsExpanded}>
+                              <summary className="flex cursor-pointer list-none items-start gap-2 [&::-webkit-details-marker]:hidden">
+                                <div className={`shrink-0 rounded-lg p-1.5 ${style.bg} ${style.color}`}><Icon className="h-3.5 w-3.5" /></div>
+                                <div className="text-sm font-medium text-gray-900 group-hover:text-gray-600">{evt.title}</div>
+                              </summary>
+                              <div className="ml-10 mt-1 rounded-xl border border-gray-100 bg-white/80 p-3 font-mono text-xs text-gray-500 shadow-sm whitespace-pre-wrap break-all">{evt.content}</div>
+                            </details>
+                          ) : (
+                            <div className="flex items-start gap-2">
+                              <div className={`shrink-0 rounded-lg p-1.5 ${style.bg} ${style.color}`}><Icon className="h-3.5 w-3.5" /></div>
+                              <div className="text-sm font-medium text-gray-900">{evt.title}</div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
             })}
             <div ref={chatEndRef} />
           </div>
         )}
 
-        {/* HITL 方向确认已嵌入 AI 消息框中，此处不再单独渲染 */}
-
-        <div className={`${isNewChat ? 'flex-1 flex flex-col items-center justify-center p-8' : 'p-6 bg-white border-t border-gray-100 shrink-0'}`}>
-          <div className={`w-full ${isNewChat ? 'max-w-2xl' : 'max-w-4xl'} mx-auto`}>
-            
+        <div className={`${isNewChat ? 'flex-1 flex flex-col items-center justify-center p-8' : 'border-t border-gray-200/70 bg-[#fbfbf8]/95 p-6 shrink-0'}`}>
+          <div className={`mx-auto w-full ${isNewChat ? 'max-w-2xl' : 'max-w-4xl'}`}>
             {isNewChat && (
-              <div className="text-center mb-12">
-                <div className="w-16 h-16 bg-black rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-xl shadow-gray-200">
-                  <Bot className="w-8 h-8 text-white" />
+              <div className="mb-12 text-center">
+                <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-2xl bg-gray-950 shadow-xl shadow-gray-200">
+                  <Bot className="h-8 w-8 text-white" />
                 </div>
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">What would you like to research?</h2>
+                <h2 className="mb-2 text-2xl font-semibold tracking-tight text-gray-950">What would you like to research?</h2>
+                <p className="text-sm text-gray-500">Ask a focused question and choose the model/budget before the first run.</p>
               </div>
             )}
 
             {error && (
-              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600 flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
-                <AlertCircle className="w-4 h-4" />{error}
+              <div className="mb-4 flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700 animate-in fade-in slide-in-from-top-2">
+                <AlertCircle className="h-4 w-4" />{error}
               </div>
             )}
 
-            {/* Unified Input Card - 研究进行中始终显示 */}
-            {true && (
-            <div className={`bg-[#f4f4f4] border border-transparent rounded-[26px] focus-within:border-gray-200 focus-within:bg-white focus-within:shadow-lg transition-all relative z-20 flex flex-col`}>
-              <textarea
-                ref={textareaRef}
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                placeholder={isNewChat ? "Start a deep research..." : "Ask a follow-up..."}
-                style={{ outline: 'none' }}
-                className={`w-full px-4 pt-4 pb-2 bg-transparent border-none resize-none max-h-[200px] overflow-y-auto text-gray-900 placeholder:text-gray-500 ${isNewChat ? 'min-h-[52px] text-base' : 'min-h-[40px]'}`}
-                rows={1}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-              />
-              
-              <div className="w-full flex items-center gap-3 px-2 pb-2 mt-2">
-                {isNewChat ? (
-                  <div className="flex items-center gap-3 flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-none w-[220px]">
-                      <div className="flex items-center gap-1 text-[11px] font-medium text-gray-600 whitespace-nowrap">
-                        <Coins className="w-3.5 h-3.5 text-gray-500" />
-                        <span>研究预算</span>
-                      </div>
-                      <div className="grid grid-cols-3 gap-1 bg-white border border-gray-200 rounded-2xl shadow-sm h-11 p-1 w-full">
-                        {BUDGET_OPTIONS.map((option) => {
-                          const active = selectedBudget === option.value;
-                          return (
-                            <button
-                              key={option.value}
-                              onClick={() => setSelectedBudget(option.value)}
-                              title={option.caption}
-                              className={`h-full px-2 rounded-xl text-left flex flex-col justify-center leading-tight transition-all ${
-                                active ? 'bg-black text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                              }`}
-                            >
-                              <span className="text-xs font-semibold">{option.label}</span>
-                              <span className={`text-[10px] ${active ? 'text-white/80' : 'text-gray-400'} hidden 2xl:block`}>{option.caption}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 flex-1 min-w-[200px] max-w-[320px]">
-                      <div className="flex items-center gap-1 text-[11px] font-medium text-gray-600 whitespace-nowrap">
-                        <Zap className="w-3.5 h-3.5 text-amber-500" />
-                        <span>模型选择</span>
-                      </div>
-                      <div ref={modelMenuRef} className="relative flex-1 min-w-[200px]">
-                        <button
-                          onClick={() => setShowModelMenu(!showModelMenu)}
-                          className="flex items-center gap-3 px-3 h-11 w-full text-left bg-white border border-gray-200 rounded-2xl shadow-sm hover:border-gray-300"
-                        >
-                          <div className="flex flex-col text-sm min-w-0">
-                            <span className="font-medium text-gray-900 truncate">{selectedModelInfo?.name || '选择模型'}</span>
-                            <span className="text-[11px] text-gray-500 truncate hidden xl:block">{selectedModelInfo?.model || '点击挑选或新增模型'}</span>
-                          </div>
-                          <ChevronDown className={`w-4 h-4 text-gray-400 ml-auto transition-transform ${showModelMenu ? 'rotate-180' : ''}`} />
-                        </button>
-
-                        {showModelMenu && (
-                          <div className="absolute bottom-full left-0 mb-2 w-full sm:w-[320px] bg-white border border-gray-200 rounded-2xl shadow-xl p-4 animate-in fade-in zoom-in-95 origin-bottom-left z-50">
-                            <div className="flex items-center justify-between mb-3">
-                              <div>
-                                <p className="text-sm font-semibold text-gray-900">选择模型</p>
-                                <p className="text-[11px] text-gray-500">首条消息会锁定模型与凭证</p>
-                              </div>
-                              <button
-                                onClick={() => refreshModelList()}
-                                className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50"
-                                disabled={modelListLoading}
-                              >
-                                <RefreshCw className={`w-4 h-4 ${modelListLoading ? 'animate-spin' : ''}`} />
-                              </button>
-                            </div>
-
-                            <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
-                              {[{ key: 'platform', label: '平台内置', icon: <Shield className="w-3.5 h-3.5 text-gray-500" />, models: groupedModels.platform, empty: '暂无内置模型，请联系管理员' },
-                                { key: 'user', label: '我的模型', icon: <User className="w-3.5 h-3.5 text-gray-500" />, models: groupedModels.user, empty: '暂无自定义模型，先在下方创建' }].map(section => (
-                                  <div key={section.key}>
-                                    <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                                      {section.icon}
-                                      <span>{section.label}</span>
-                                      <span className="text-[10px] text-gray-400">({section.models.length})</span>
-                                    </div>
-                                    {section.models.length === 0 ? (
-                                      <p className="text-[11px] text-gray-400 ml-6 mt-1">{section.empty}</p>
-                                    ) : (
-                                      <div className="mt-2 space-y-1">
-                                        {section.models.map(model => {
-                                          const active = selectedModelId === model.id;
-                                          return (
-                                            <button
-                                              key={model.id}
-                                              onClick={() => { setSelectedModelId(model.id); setShowModelMenu(false); }}
-                                              className={`w-full text-left px-3 py-2 rounded-xl border text-sm transition-colors ${active ? 'border-black bg-black/5 text-gray-900' : 'border-gray-100 hover:border-gray-200 text-gray-700'}`}
-                                            >
-                                              <div className="flex items-center justify-between gap-2">
-                                                <span className="font-medium truncate">{model.name || model.model}</span>
-                                                <span className={`text-[10px] px-2 py-0.5 rounded-full ${model.type === 'GLOBAL' ? 'bg-gray-100 text-gray-600' : 'bg-amber-100 text-amber-600'}`}>
-                                                  {model.type === 'GLOBAL' ? '内置' : '自定义'}
-                                                </span>
-                                              </div>
-                                              <div className="text-[11px] text-gray-500 mt-1 truncate">ID：{model.model}</div>
-                                            </button>
-                                          );
-                                        })}
-                                      </div>
-                                    )}
-                                  </div>
-                              ))}
-                            </div>
-
-                            <div className="mt-4 space-y-2">
-                              {modelList.length === 0 && <p className="text-xs text-red-500">暂无可用模型，请先创建一个。</p>}
-                              <button
-                                onClick={() => { setShowModelMenu(false); setIsModelManagerOpen(true); }}
-                                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm font-medium rounded-xl border border-gray-200 text-gray-700 hover:bg-gray-50"
-                              >
-                                <Plus className="w-4 h-4" />
-                                管理模型
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex-1" />
-                )}
-
-                <button 
-                    onClick={sendMessage} 
-                    disabled={!inputValue.trim()} 
-                    className={`flex-none p-2 rounded-full transition-all shadow-sm ${inputValue.trim() ? 'bg-black text-white hover:bg-gray-800' : 'bg-gray-200 text-gray-400'}`}
-                >
-                    <Send className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-            )}
+            <AI_Prompt
+              value={inputValue}
+              onValueChange={setInputValue}
+              onSubmit={sendMessage}
+              placeholder={isNewChat ? "Start a deep research..." : "Ask a follow-up..."}
+              className="relative z-20 py-0"
+              models={inputModelOptions}
+              selectedModel={currentResearch?.modelId || selectedModelId}
+              onModelChange={setSelectedModelId}
+              modelDisabled={Boolean(currentResearch?.modelId)}
+              modelLoading={modelListLoading}
+              onRefreshModels={() => refreshModelList()}
+              onManageModels={() => setIsModelManagerOpen(true)}
+              showBudget={isNewChat || !currentResearch?.modelId}
+              budgetOptions={BUDGET_OPTIONS}
+              selectedBudget={selectedBudget}
+              onBudgetChange={(value) => setSelectedBudget(value as BudgetValue)}
+            />
 
             {isNewChat && (
               <div className="mt-8 flex flex-wrap justify-center gap-3">
                 {['Market Analysis', 'Scientific Review', 'Code Architecture'].map((topic) => (
-                  <button key={topic} onClick={() => setInputValue(topic)} className="px-4 py-2 bg-white hover:bg-gray-50 border border-gray-200 rounded-full text-sm text-gray-600 transition-colors shadow-sm">
+                  <button key={topic} onClick={() => setInputValue(topic)} className="rounded-full border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 shadow-sm transition-colors hover:bg-gray-50">
                     {topic}
                   </button>
                 ))}
@@ -1376,6 +1628,13 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
         </div>
       </div>
     </main>
+    <AgentFlowPanel
+      title={currentResearch?.title || 'New research'}
+      status={currentResearch ? getStatusLabel(currentResearch.status) : '等待会话事件'}
+      events={currentResearch?.events || []}
+      messages={currentResearch?.messages || []}
+    />
+    </div>
     <ModelManagerModal
       isOpen={isModelManagerOpen}
       onClose={() => setIsModelManagerOpen(false)}
@@ -1391,7 +1650,7 @@ function AppContent() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   return (
-    <div className="h-screen flex bg-white relative overflow-hidden">
+    <div className="relative flex h-[100dvh] overflow-hidden bg-white">
       <Sidebar isOpen={sidebarOpen} toggle={() => setSidebarOpen(false)} />
       
       {!sidebarOpen && (
@@ -1403,7 +1662,7 @@ function AppContent() {
         </button>
       )}
 
-      <div className="flex-1 flex flex-col min-w-0 w-full overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <Routes>
             <Route path="/research/:id" element={<ResearchPage sidebarOpen={sidebarOpen} />} />
             <Route path="/new" element={<ResearchPage sidebarOpen={sidebarOpen} />} />
