@@ -92,5 +92,5 @@ npm run build
 - [架构设计](docs/架构设计.md)
 - [API 与数据契约](docs/API与数据契约.md)
 - [性能与可观测性](docs/性能与可观测性.md)
-- [HITL 方向确认](hitl.md)
+- [HITL 方向确认](docs/hitl.md)
 
