@@ -26,7 +26,7 @@ from app.domain.dto import (
     UserInfoResp,
 )
 from app.infrastructure.llm import model_handler
-from app.domain.models import ChatMessage, Model, ResearchSession, User
+from app.domain.models import ChatMessage, Model, ResearchSession, User, WorkflowEvent
 from app.application.pipeline import agent_pipeline
 from app.domain.runtime import ResearchMessage
 from app.domain.state import BudgetSnapshot, DeepResearchState, TraceMetadataModel
@@ -34,6 +34,16 @@ from app.core.timeutil import now_local
 
 
 AVATAR_URL_TEMPLATE = "https://api.dicebear.com/9.x/pixel-art/svg?seed={}"
+MANAGE_BLOCKED_STATUSES = {
+    WorkflowStatus.QUEUE,
+    WorkflowStatus.START,
+    WorkflowStatus.IN_SCOPE,
+    WorkflowStatus.AWAITING_DIRECTION_CONFIRM,
+    WorkflowStatus.IN_RESEARCH,
+    WorkflowStatus.IN_REPORT,
+}
+RESUMABLE_STATUSES = {WorkflowStatus.FAILED, WorkflowStatus.CANCELLED}
+GENERIC_RESUME_TEXTS = {"继续", "继续研究", "继续执行", "恢复", "恢复研究", "resume", "continue"}
 
 
 class UserService:
@@ -175,7 +185,7 @@ class ResearchService:
         async with SessionLocal() as session:
             result = await session.execute(
                 select(ResearchSession)
-                .where(ResearchSession.user_id == user_id)
+                .where(ResearchSession.user_id == user_id, ResearchSession.status != WorkflowStatus.ARCHIVED)
                 .order_by(desc(ResearchSession.update_time)),
             )
             return [self._status_resp(item) for item in result.scalars()]
@@ -215,9 +225,6 @@ class ResearchService:
         )
 
     async def send_message(self, user_id: int, research_id: str, req: SendMessageReq) -> SendMessageResp:
-        affected = await self._cas_update_to_queue(research_id, user_id)
-        if affected == 0:
-            raise ResearchError("启动研究异常")
         async with SessionLocal() as session:
             session_obj = await session.get(ResearchSession, research_id)
             if session_obj is None:
@@ -226,6 +233,10 @@ class ResearchService:
                 raise ResearchError("无权访问此研究")
             model_id = session_obj.model_id
             budget = session_obj.budget
+            previous_status = session_obj.status
+        affected = await self._cas_update_to_queue(research_id, user_id)
+        if affected == 0:
+            raise ResearchError("启动研究异常")
         if model_id is None:
             if not req.model_id:
                 raise ResearchError("模型不应为空")
@@ -238,11 +249,101 @@ class ResearchService:
         budget_name = (budget or "HIGH").upper()
         budget_level = get_settings().budget_levels().get(budget_name) or get_settings().budget_levels()["HIGH"]
         hitl_mode = req.hitl_mode or "DIRECTION_ONLY"
-        await get_cache().save_message(research_id, "user", req.content)
+        if previous_status in RESUMABLE_STATUSES:
+            state = await self._build_resume_state(
+                user_id,
+                research_id,
+                model_id,
+                budget_name,
+                budget_level,
+                req.content,
+                hitl_mode,
+            )
+        else:
+            await get_cache().save_message(research_id, "user", req.content)
+            db_messages = await self._load_db_messages(research_id)
+            state = self._new_state_from_messages(
+                user_id,
+                research_id,
+                model_id,
+                budget_name,
+                budget_level,
+                db_messages,
+                hitl_mode,
+            )
+        await agent_pipeline.run(state)
+        return SendMessageResp(id=research_id, content="已接受任务")
+
+    async def _build_resume_state(
+        self,
+        user_id: int,
+        research_id: str,
+        model_id: str,
+        budget_name: str,
+        budget_level,
+        content: str,
+        hitl_mode: str,
+    ) -> DeepResearchState:
+        resume_text = content.strip()
+        is_generic_resume = resume_text.lower() in GENERIC_RESUME_TEXTS
+        checkpoint = await get_cache().load_checkpoint(research_id)
+        if checkpoint:
+            state = DeepResearchState.model_validate(checkpoint)
+            state.trace_metadata_model = TraceMetadataModel(
+                research_id=research_id,
+                user_id=user_id,
+                model_id=model_id,
+                budget_level=budget_name,
+                agent_framework=get_settings().research_agent_framework,
+            )
+            state.budget = BudgetSnapshot(
+                max_conduct_count=budget_level.max_conduct_count,
+                max_search_count=budget_level.max_search_count,
+                max_concurrent_units=budget_level.max_concurrent_units,
+            )
+            state.budget_name = budget_name
+            state.hitl_mode = hitl_mode
+            if not is_generic_resume:
+                await get_cache().save_message(research_id, "user", resume_text)
+                state.chat_history = await self._load_db_messages(research_id)
+                state.hitl_feedback = resume_text
+            else:
+                await get_cache().save_message(research_id, "user", "继续之前中断的研究")
+            state.skip_scope_phase = bool(state.research_brief)
+            state.status = state.status if state.status in {WorkflowStatus.IN_RESEARCH, WorkflowStatus.IN_REPORT} else WorkflowStatus.IN_RESEARCH
+            return state
+
+        await get_cache().save_message(research_id, "user", resume_text)
         db_messages = await self._load_db_messages(research_id)
-        state = DeepResearchState(
+        state = self._new_state_from_messages(
+            user_id,
+            research_id,
+            model_id,
+            budget_name,
+            budget_level,
+            db_messages,
+            hitl_mode,
+        )
+        await self._hydrate_resume_state_from_events(state)
+        state.hitl_feedback = None if is_generic_resume else resume_text
+        state.skip_scope_phase = bool(state.research_brief)
+        if state.research_brief:
+            state.status = WorkflowStatus.IN_RESEARCH
+        return state
+
+    def _new_state_from_messages(
+        self,
+        user_id: int,
+        research_id: str,
+        model_id: str,
+        budget_name: str,
+        budget_level,
+        messages: list[ResearchMessage],
+        hitl_mode: str,
+    ) -> DeepResearchState:
+        return DeepResearchState(
             research_id=research_id,
-            chat_history=db_messages,
+            chat_history=messages,
             status=WorkflowStatus.QUEUE,
             trace_metadata_model=TraceMetadataModel(
                 research_id=research_id,
@@ -263,8 +364,25 @@ class ResearchService:
             search_notes=[],
             hitl_mode=hitl_mode,
         )
-        await agent_pipeline.run(state)
-        return SendMessageResp(id=research_id, content="已接受任务")
+
+    async def _hydrate_resume_state_from_events(self, state: DeepResearchState) -> None:
+        async with SessionLocal() as session:
+            result = await session.execute(
+                select(WorkflowEvent)
+                .where(WorkflowEvent.research_id == state.research_id)
+                .order_by(WorkflowEvent.sequence_no.asc()),
+            )
+            events = list(result.scalars())
+        for event in events:
+            if event.type == EventType.SCOPE and event.title in {"已制定研究计划", "研究方向已确定，请确认"}:
+                if event.content:
+                    state.research_brief = event.content
+            elif event.type == EventType.SUPERVISOR and event.title == "已拆解研究任务":
+                if event.content and not state.supervisor_notes:
+                    state.supervisor_notes.append("## 研究任务拆解\n\n" + event.content)
+            elif event.type == EventType.RESEARCH and event.title.startswith("已完成该主题研究"):
+                if event.content:
+                    state.supervisor_notes.append(event.content)
 
     async def confirm_direction(self, user_id: int, research_id: str, req: ConfirmDirectionReq) -> SendMessageResp:
         affected = await self._cas_confirm_direction(research_id, user_id)
@@ -319,6 +437,43 @@ class ResearchService:
         await event_publisher.publish_message(research_id, "assistant", "研究已取消")
         return SendMessageResp(id=research_id, content="研究已取消")
 
+    async def archive_research(self, user_id: int, research_id: str) -> SendMessageResp:
+        async with SessionLocal() as session:
+            session_obj = await session.get(ResearchSession, research_id)
+            if session_obj is None or session_obj.user_id != user_id:
+                raise ResearchError("归档失败，研究不存在")
+            if session_obj.status in MANAGE_BLOCKED_STATUSES:
+                raise ResearchError("研究正在进行中，请先取消后再归档")
+            result = await session.execute(
+                text(
+                    """
+                    UPDATE research_session
+                    SET status = 'ARCHIVED', update_time = NOW()
+                    WHERE id = :id AND user_id = :user_id
+                    """,
+                ),
+                {"id": research_id, "user_id": user_id},
+            )
+            await session.commit()
+            if result.rowcount == 0:
+                raise ResearchError("归档失败，研究不存在")
+        await get_cache().remove_checkpoint(research_id)
+        return SendMessageResp(id=research_id, content="研究已归档")
+
+    async def delete_research(self, user_id: int, research_id: str) -> SendMessageResp:
+        async with SessionLocal() as session:
+            session_obj = await session.get(ResearchSession, research_id)
+            if session_obj is None or session_obj.user_id != user_id:
+                raise ResearchError("删除失败，研究不存在")
+            if session_obj.status in MANAGE_BLOCKED_STATUSES:
+                raise ResearchError("研究正在进行中，请先取消后再删除")
+            await session.execute(text("DELETE FROM workflow_event WHERE research_id = :id"), {"id": research_id})
+            await session.execute(text("DELETE FROM chat_message WHERE research_id = :id"), {"id": research_id})
+            await session.delete(session_obj)
+            await session.commit()
+        await get_cache().remove_checkpoint(research_id)
+        return SendMessageResp(id=research_id, content="研究已删除")
+
     async def _load_db_messages(self, research_id: str) -> list[ResearchMessage]:
         async with SessionLocal() as session:
             result = await session.execute(
@@ -342,7 +497,7 @@ class ResearchService:
                     UPDATE research_session
                     SET status = 'QUEUE', update_time = NOW()
                     WHERE id = :id AND user_id = :user_id
-                      AND status IN ('NEW', 'NEED_CLARIFICATION', 'AWAITING_DIRECTION_CONFIRM', 'CANCELLED')
+                      AND status IN ('NEW', 'NEED_CLARIFICATION', 'AWAITING_DIRECTION_CONFIRM', 'FAILED', 'CANCELLED')
                     """,
                 ),
                 {"id": research_id, "user_id": user_id},

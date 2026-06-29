@@ -40,6 +40,7 @@ class ResearchTaskQueue:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[tuple[str, DeepResearchState]] | None = None
         self._workers: list[asyncio.Task] = []
+        self._active_count = 0
         self._started = False
         self._recovered = False
 
@@ -72,23 +73,28 @@ class ResearchTaskQueue:
         assert self._queue is not None
         if self._queue.full():
             raise RuntimeError("系统繁忙，请稍后重试")
-        estimated = self._calculate_estimated_time()
+        queue_notice = self._queue_notice()
         self._queue.put_nowait((state.research_id, state))
-        await event_publisher.publish_temp_event(
-            state.research_id,
-            EventType.QUEUE,
-            "排队中：预计 " + estimated + " 开始执行",
-        )
+        if queue_notice:
+            await event_publisher.publish_temp_event(
+                state.research_id,
+                EventType.QUEUE,
+                queue_notice,
+            )
 
-    def _calculate_estimated_time(self) -> str:
+    def _queue_notice(self) -> str | None:
         if self._queue is None:
-            return now_local().strftime("%H:%M")
+            return None
         settings = get_settings()
         queue_size = self._queue.qsize()
+        worker_count = max(1, settings.research_async_max_pool_size)
+        if self._active_count < worker_count and queue_size == 0:
+            return None
         position = queue_size + 1
         batch = (position + settings.research_async_max_pool_size - 1) // settings.research_async_max_pool_size
         wait_minutes = batch * settings.research_async_task_timeout_minutes
-        return (now_local() + timedelta(minutes=wait_minutes)).strftime("%H:%M")
+        estimated = (now_local() + timedelta(minutes=wait_minutes)).strftime("%H:%M")
+        return f"排队中：前方 {queue_size} 个任务，预计 {estimated} 开始执行"
 
 
     async def _worker(self) -> None:
@@ -96,8 +102,10 @@ class ResearchTaskQueue:
         while True:
             _, state = await self._queue.get()
             try:
+                self._active_count += 1
                 await agent_pipeline._run_now(state)
             finally:
+                self._active_count = max(0, self._active_count - 1)
                 self._queue.task_done()
 
     async def _recover_interrupted_tasks(self) -> None:
@@ -287,6 +295,7 @@ class AgentPipeline:
 
     async def _run_now(self, state: DeepResearchState) -> None:
         research_id = state.research_id
+        resume_status = state.status
         try:
             with workflow_span(state):
                 state.status = WorkflowStatus.START
@@ -295,8 +304,13 @@ class AgentPipeline:
                 if state.skip_scope_phase:
                     state.status = WorkflowStatus.IN_SCOPE
                     await update_research_session(research_id, WorkflowStatus.IN_SCOPE, state)
-                    await self._execute_phase_2_and_3(state)
-                    await get_cache().remove_checkpoint(research_id)
+                    await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
+                    if resume_status == WorkflowStatus.IN_REPORT and state.supervisor_notes:
+                        await self._execute_report_only(state)
+                    else:
+                        await self._execute_phase_2_and_3(state)
+                    if state.status == WorkflowStatus.COMPLETED:
+                        await get_cache().remove_checkpoint(research_id)
                     return
 
                 async with stage_span("ScopeAgent", state):
@@ -363,6 +377,7 @@ class AgentPipeline:
 
         state.status = WorkflowStatus.IN_RESEARCH
         await update_research_session(research_id, WorkflowStatus.IN_RESEARCH, state)
+        await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
         async with stage_span("SupervisorAgent", state):
             await supervisor_agent.run(state)
 
@@ -384,7 +399,17 @@ class AgentPipeline:
             await update_research_session(research_id, WorkflowStatus.FAILED, state)
             return
         await update_research_session(research_id, WorkflowStatus.IN_RESEARCH, state)
+        await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
 
+        if await is_cancelled(research_id):
+            state.status = WorkflowStatus.CANCELLED
+            await update_research_session(research_id, WorkflowStatus.CANCELLED, state)
+            return
+
+        await self._execute_report_only(state)
+
+    async def _execute_report_only(self, state: DeepResearchState) -> None:
+        research_id = state.research_id
         if await is_cancelled(research_id):
             state.status = WorkflowStatus.CANCELLED
             await update_research_session(research_id, WorkflowStatus.CANCELLED, state)
@@ -392,6 +417,7 @@ class AgentPipeline:
 
         state.status = WorkflowStatus.IN_REPORT
         await update_research_session(research_id, WorkflowStatus.IN_REPORT, state)
+        await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
         async with stage_span("ReportAgent", state):
             await report_agent.run(state)
 

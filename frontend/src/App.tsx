@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Routes, Route, Navigate, useNavigate, useParams, Link, useLocation } from 'react-router-dom';
-import { Plus, Loader2, Send, AlertCircle, Sparkles, Search, Brain, Globe, FileSearch, Zap, User, Bot, CheckCircle2, PanelLeftClose, PanelLeftOpen, MessageSquare, Clock, Coins, ChevronsUpDown, Copy } from 'lucide-react';
+import { Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom';
+import { Plus, Loader2, Send, AlertCircle, Sparkles, Search, Brain, Globe, FileSearch, Zap, User, Bot, CheckCircle2, PanelLeftClose, PanelLeftOpen, MessageSquare, Clock, Coins, ChevronsUpDown, Copy, Archive, Trash2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
@@ -188,6 +188,16 @@ const LIVE_SSE_STATUSES = new Set([
   'IN_REPORT',
 ]);
 
+const MANAGE_BLOCKED_STATUSES = new Set([
+  'QUEUE',
+  'START',
+  'RUNNING',
+  'IN_SCOPE',
+  'AWAITING_DIRECTION_CONFIRM',
+  'IN_RESEARCH',
+  'IN_REPORT',
+]);
+
 function shouldConnectLiveSse(status?: string) {
   return LIVE_SSE_STATUSES.has((status || '').toUpperCase());
 }
@@ -270,6 +280,7 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
   const historyLoadInFlightRef = useRef(false);
   const pendingHistoryRefreshRef = useRef(false);
   const initialLoadRef = useRef(true);
+  const [managingResearchId, setManagingResearchId] = useState<string | null>(null);
 
   // 模型字典用于显示model name
   const modelDictionary = useMemo(() => {
@@ -353,6 +364,37 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
     return () => window.removeEventListener(HISTORY_UPDATE_EVENT, handleHistoryStatusUpdate);
   }, []);
 
+  const handleArchiveResearch = useCallback(async (researchId: string) => {
+    setManagingResearchId(researchId);
+    try {
+      await researchApi.archiveResearch(researchId);
+      setHistory(prev => prev.filter(item => item.id !== researchId));
+      if (currentId === researchId) navigate('/new');
+      window.dispatchEvent(new Event(REFRESH_HISTORY_EVENT));
+    } catch (e: any) {
+      console.error('Failed to archive research', e);
+      window.alert(e?.message || '归档失败');
+    } finally {
+      setManagingResearchId(null);
+    }
+  }, [currentId, navigate]);
+
+  const handleDeleteResearch = useCallback(async (researchId: string) => {
+    if (!window.confirm('确定要删除这条研究会话吗？删除后无法恢复。')) return;
+    setManagingResearchId(researchId);
+    try {
+      await researchApi.deleteResearch(researchId);
+      setHistory(prev => prev.filter(item => item.id !== researchId));
+      if (currentId === researchId) navigate('/new');
+      window.dispatchEvent(new Event(REFRESH_HISTORY_EVENT));
+    } catch (e: any) {
+      console.error('Failed to delete research', e);
+      window.alert(e?.message || '删除失败');
+    } finally {
+      setManagingResearchId(null);
+    }
+  }, [currentId, navigate]);
+
   const isArenaActive = location.pathname.startsWith('/arena');
 
   return (
@@ -425,20 +467,55 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
               const modelInfo = item.modelId ? modelDictionary[item.modelId] : null;
               const modelDisplayName = modelInfo?.name || modelInfo?.model || null;
               const active = currentId === item.id;
+              const manageDisabled = MANAGE_BLOCKED_STATUSES.has(item.status?.toUpperCase() || '') || managingResearchId === item.id;
               return (
-                <Link
+                <div
                   key={item.id}
-                  to={`/research/${item.id}`}
-                  className={`group relative block rounded-xl px-3 py-3 text-left transition-all ${
+                  className={`group relative rounded-xl transition-all ${
                     active
                       ? 'bg-white text-gray-950 shadow-sm ring-1 ring-gray-200'
                       : 'text-gray-600 hover:bg-white/80 hover:text-gray-950'
                   }`}
                 >
                   {active && <span className="absolute left-0 top-3 h-8 w-1 rounded-r-full bg-gray-950" />}
+                  <div className="absolute right-2 top-2 flex items-center gap-1 opacity-60 transition-opacity group-hover:opacity-100">
+                    <button
+                      type="button"
+                      disabled={manageDisabled}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (manageDisabled) return;
+                        handleArchiveResearch(item.id);
+                      }}
+                      className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                      aria-label="归档会话"
+                      title={manageDisabled ? '进行中的会话请先取消' : '归档'}
+                    >
+                      <Archive className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={manageDisabled}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (manageDisabled) return;
+                        handleDeleteResearch(item.id);
+                      }}
+                      className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/20 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-gray-400"
+                      aria-label="删除会话"
+                      title={manageDisabled ? '进行中的会话请先取消' : '删除'}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/research/${item.id}`)}
+                    className="block w-full rounded-xl px-3 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-900/10"
+                  >
                   <div className="flex items-start gap-3">
                     <div className={`mt-1 h-2 w-2 shrink-0 rounded-full ${getStatusDot(item.status)}`} />
-                    <div className="min-w-0 flex-1 space-y-1.5">
+                    <div className="min-w-0 flex-1 space-y-1.5 pr-12">
                       <div className="truncate text-[13px] font-semibold leading-5">{item.title || 'Untitled'}</div>
                       <div className="flex min-w-0 items-center gap-2">
                         <span className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${getStatusTone(item.status)}`}>
@@ -451,7 +528,8 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
                       </div>
                     </div>
                   </div>
-                </Link>
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -1150,13 +1228,6 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
       content,
       createTime: new Date().toISOString()
     };
-    // 终端状态则跳转新研究
-    if (currentResearch.status && ['COMPLETED', 'FAILED', 'CANCELLED'].includes(currentResearch.status.toUpperCase())) {
-      navigate('/new');
-      setTimeout(() => window.dispatchEvent(new CustomEvent('resend-message', { detail: content })), 100);
-      return;
-    }
-
     // 研究中不允许发送新消息
     const activeResearchStatuses = ['QUEUE', 'START', 'RUNNING', 'IN_SCOPE', 'IN_RESEARCH', 'IN_REPORT'];
     if (currentResearch.status && activeResearchStatuses.includes(currentResearch.status.toUpperCase())) {

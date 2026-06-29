@@ -260,4 +260,19 @@ export const researchApi = {
     }
     return response.data.data;
   },
+
+  archiveResearch: async (researchId: string): Promise<SendMessageResponse> => {
+    const response = await researchClient.post<Result<SendMessageResponse>>(`/${researchId}/archive`);
+    if (response.data.code !== 0) {
+      throw new Error(response.data.message || '归档失败');
+    }
+    return response.data.data;
+  },
+
+  deleteResearch: async (researchId: string): Promise<void> => {
+    const response = await researchClient.delete<Result<SendMessageResponse>>(`/${researchId}`);
+    if (response.data.code !== 0) {
+      throw new Error(response.data.message || '删除失败');
+    }
+  },
 };
