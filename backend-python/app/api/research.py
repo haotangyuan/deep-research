@@ -54,3 +54,13 @@ async def confirm_direction(research_id: str, req: ConfirmDirectionReq, user_id:
 @router.post("/api/v1/research/{research_id}/cancel")
 async def cancel_research(research_id: str, user_id: int = Depends(current_user_id)):
     return success((await research_service.cancel_research(user_id, research_id)).api_dump())
+
+
+@router.post("/api/v1/research/{research_id}/archive")
+async def archive_research(research_id: str, user_id: int = Depends(current_user_id)):
+    return success((await research_service.archive_research(user_id, research_id)).api_dump())
+
+
+@router.delete("/api/v1/research/{research_id}")
+async def delete_research(research_id: str, user_id: int = Depends(current_user_id)):
+    return success((await research_service.delete_research(user_id, research_id)).api_dump())

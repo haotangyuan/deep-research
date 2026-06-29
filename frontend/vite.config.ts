@@ -5,7 +5,8 @@ import path from 'path'
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const apiBase = env.API_BASE_URL || 'http://localhost:8080'
+  const apiBase = env.API_BASE_URL || ''
+  const proxyTarget = env.API_BASE_URL || 'http://127.0.0.1:8080'
 
   return {
     plugins: [react()],
@@ -21,7 +22,7 @@ export default defineConfig(({ mode }) => {
     server: {
       proxy: {
         '/api': {
-          target: `${apiBase}/api`,
+          target: `${proxyTarget}/api`,
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api/, ''),
         },

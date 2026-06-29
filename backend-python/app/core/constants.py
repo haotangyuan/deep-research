@@ -10,6 +10,7 @@ class WorkflowStatus:
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    ARCHIVED = "ARCHIVED"
 
 
 class EventType:
