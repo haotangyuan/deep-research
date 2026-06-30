@@ -644,6 +644,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
   const [isClarifySubmitting, setIsClarifySubmitting] = useState(false);
   const [clarifyTextInput, setClarifyTextInput] = useState("");
   const [isClarifyTextSubmitting, setIsClarifyTextSubmitting] = useState(false);
+  const [isResumingFailedResearch, setIsResumingFailedResearch] = useState(false);
 
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -1166,6 +1167,24 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
     }
   }, [currentResearch, disconnectSSE, syncResearchSnapshot]);
 
+  const handleResumeFailedResearch = useCallback(async () => {
+    if (!currentResearch || currentResearch.status?.toUpperCase() !== 'FAILED') return;
+    setIsResumingFailedResearch(true);
+    setError(null);
+    try {
+      await researchApi.sendMessage(currentResearch.id, '继续');
+      setCurrentResearch(prev => prev ? { ...prev, status: 'RUNNING' } : prev);
+      const snapshot = await syncResearchSnapshot(currentResearch.id);
+      if (shouldConnectLiveSse(snapshot?.status)) {
+        connectSSE(currentResearch.id);
+      }
+    } catch (e: any) {
+      setError(e.message || '恢复失败');
+    } finally {
+      setIsResumingFailedResearch(false);
+    }
+  }, [currentResearch, connectSSE, syncResearchSnapshot]);
+
   const sendMessage = async () => {
     if (!inputValue.trim()) return;
     const content = inputValue.trim();
@@ -1349,6 +1368,21 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
             </div>
             {/* Cancel / Expand buttons */}
             <div className="flex shrink-0 items-center gap-2">
+              {currentResearch?.status?.toUpperCase() === 'FAILED' && (
+                <button
+                  onClick={handleResumeFailedResearch}
+                  disabled={isResumingFailedResearch}
+                  className="flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-3.5 py-2 text-sm font-semibold text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                  title="从失败阶段继续执行"
+                >
+                  {isResumingFailedResearch ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Zap className="h-4 w-4" />
+                  )}
+                  <span>{isResumingFailedResearch ? '恢复中' : '从失败处继续'}</span>
+                </button>
+              )}
               {currentResearch && !['COMPLETED', 'FAILED', 'CANCELLED', 'NEED_CLARIFICATION'].includes(currentResearch.status) && (
                 <button
                   onClick={handleCancelResearch}

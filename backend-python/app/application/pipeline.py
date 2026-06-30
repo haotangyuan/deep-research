@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import timedelta
 
 from sqlalchemy import select, text
@@ -12,7 +13,7 @@ from app.core.constants import EventType, WorkflowStatus
 from app.infrastructure.db import SessionLocal
 from app.infrastructure.events import event_publisher
 from app.infrastructure.llm import model_handler
-from app.infrastructure.observability import stage_span, workflow_span
+from app.infrastructure.observability import stage_span, summarize, workflow_span
 from app.infrastructure.sse import sse_hub
 from app.domain.models import ChatMessage, Model, ResearchSession
 from app.domain.runtime import ResearchMessage
@@ -34,6 +35,23 @@ REVISE_DIRECTION_FALLBACK = "请重新调整研究方向"
 
 def should_rebuild_scope_from_latest_user(latest_user_text: str) -> bool:
     return latest_user_text.startswith(REVISE_DIRECTION_PREFIX) or latest_user_text == REVISE_DIRECTION_FALLBACK
+
+
+logger = logging.getLogger(__name__)
+
+
+def _dev_error_content(exc: Exception) -> str | None:
+    return summarize(f"{exc.__class__.__name__}: {exc}")
+
+
+def _checkpoint_status(state: DeepResearchState) -> str:
+    if state.status in {WorkflowStatus.IN_REPORT, WorkflowStatus.IN_RESEARCH}:
+        return state.status
+    if state.supervisor_notes:
+        return WorkflowStatus.IN_REPORT
+    if state.research_brief:
+        return WorkflowStatus.IN_RESEARCH
+    return state.status
 
 
 class ResearchTaskQueue:
@@ -307,6 +325,8 @@ class AgentPipeline:
                     await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
                     if resume_status == WorkflowStatus.IN_REPORT and state.supervisor_notes:
                         await self._execute_report_only(state)
+                    elif resume_status == WorkflowStatus.IN_RESEARCH and state.supervisor_notes:
+                        await self._execute_report_only(state)
                     else:
                         await self._execute_phase_2_and_3(state)
                     if state.status == WorkflowStatus.COMPLETED:
@@ -356,9 +376,23 @@ class AgentPipeline:
                     return
 
                 await self._execute_phase_2_and_3(state)
-        except Exception:
+        except Exception as exc:
+            logger.exception(
+                "research pipeline failed research_id=%s status=%s model_id=%s budget=%s",
+                research_id,
+                state.status,
+                state.trace_metadata_model.model_id,
+                state.budget_name,
+            )
+            state.status = _checkpoint_status(state)
+            await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
             state.status = WorkflowStatus.FAILED
-            await event_publisher.publish_event(research_id, EventType.ERROR, "系统错误，请稍后重试", None)
+            await event_publisher.publish_event(
+                research_id,
+                EventType.ERROR,
+                "系统错误，请稍后重试",
+                _dev_error_content(exc),
+            )
             await update_research_session(research_id, WorkflowStatus.FAILED, state)
         finally:
             try:

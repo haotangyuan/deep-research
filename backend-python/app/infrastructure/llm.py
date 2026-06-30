@@ -63,7 +63,8 @@ class AgentScopeChatClient:
             model=model_record.model,
             parameters=OpenAIChatModel.Parameters(max_tokens=16384),
             stream=True,
-            max_retries=0,
+            max_retries=2,
+            retry_delay=1.0,
             formatter=OpenAIChatFormatter(),
             client_kwargs={"timeout": settings.llm_timeout},
         )

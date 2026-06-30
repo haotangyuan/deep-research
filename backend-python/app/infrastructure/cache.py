@@ -18,7 +18,7 @@ from app.core.timeutil import now_local
 KIND_MESSAGE = "message"
 KIND_EVENT = "event"
 TIMELINE_TTL_SECONDS = 30 * 60
-CHECKPOINT_TTL_SECONDS = 30 * 60
+CHECKPOINT_TTL_SECONDS = 24 * 60 * 60
 
 
 class SequenceUtil:

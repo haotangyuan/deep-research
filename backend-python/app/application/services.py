@@ -44,6 +44,7 @@ MANAGE_BLOCKED_STATUSES = {
 }
 RESUMABLE_STATUSES = {WorkflowStatus.FAILED, WorkflowStatus.CANCELLED}
 GENERIC_RESUME_TEXTS = {"继续", "继续研究", "继续执行", "恢复", "恢复研究", "resume", "continue"}
+REPORT_STAGE_TITLES = {"正在生成研究报告...", "研究报告已完成", "研究报告已完成（降级）"}
 
 
 class UserService:
@@ -310,7 +311,10 @@ class ResearchService:
             else:
                 await get_cache().save_message(research_id, "user", "继续之前中断的研究")
             state.skip_scope_phase = bool(state.research_brief)
-            state.status = state.status if state.status in {WorkflowStatus.IN_RESEARCH, WorkflowStatus.IN_REPORT} else WorkflowStatus.IN_RESEARCH
+            if state.status == WorkflowStatus.IN_RESEARCH and state.supervisor_notes:
+                state.status = WorkflowStatus.IN_REPORT
+            elif state.status not in {WorkflowStatus.IN_RESEARCH, WorkflowStatus.IN_REPORT}:
+                state.status = WorkflowStatus.IN_REPORT if state.supervisor_notes else WorkflowStatus.IN_RESEARCH
             return state
 
         await get_cache().save_message(research_id, "user", resume_text)
@@ -327,7 +331,9 @@ class ResearchService:
         await self._hydrate_resume_state_from_events(state)
         state.hitl_feedback = None if is_generic_resume else resume_text
         state.skip_scope_phase = bool(state.research_brief)
-        if state.research_brief:
+        if state.supervisor_notes:
+            state.status = WorkflowStatus.IN_REPORT
+        elif state.research_brief:
             state.status = WorkflowStatus.IN_RESEARCH
         return state
 
@@ -383,6 +389,12 @@ class ResearchService:
             elif event.type == EventType.RESEARCH and event.title.startswith("已完成该主题研究"):
                 if event.content:
                     state.supervisor_notes.append(event.content)
+            elif event.type == EventType.ERROR and event.title.startswith("研究分支失败"):
+                if event.content:
+                    state.supervisor_notes.append(f"## {event.title}\n\n{event.content}")
+            elif event.type == EventType.REPORT and event.title in REPORT_STAGE_TITLES:
+                if state.supervisor_notes:
+                    state.status = WorkflowStatus.IN_REPORT
 
     async def confirm_direction(self, user_id: int, research_id: str, req: ConfirmDirectionReq) -> SendMessageResp:
         affected = await self._cas_confirm_direction(research_id, user_id)

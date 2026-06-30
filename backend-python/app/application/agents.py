@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from dataclasses import dataclass
 
@@ -14,7 +15,7 @@ from app.infrastructure.events import event_publisher
 from app.core.json_utils import extract_json, truncate
 from app.infrastructure.llm import model_handler
 from app.domain.models import ResearchSession
-from app.infrastructure.observability import stage_span, tool_span
+from app.infrastructure.observability import stage_span, summarize, tool_span
 from app.application.prompts import (
     CLARIFY_WITH_USER_INSTRUCTIONS,
     COMPRESS_RESEARCH_HUMAN_MESSAGE,
@@ -30,6 +31,14 @@ from app.domain.state import DeepResearchState, TavilySearchResult
 from app.infrastructure.tavily import tavily_client
 from app.core.timeutil import today_str
 from app.application.tools import RESEARCHER_STAGE_TOOLS, execute_simple_tool
+
+
+logger = logging.getLogger(__name__)
+
+
+def _safe_error_summary(exc: Exception) -> str:
+    raw = f"{exc.__class__.__name__}: {exc}".strip()
+    return summarize(raw) or exc.__class__.__name__
 
 
 class ScopeAgent:
@@ -230,7 +239,10 @@ class SupervisorAgent:
 
         async def run_task(task: ResearchTask) -> ResearchResult:
             async with semaphore:
-                return await self._execute_research_task(task, state)
+                try:
+                    return await self._execute_research_task(task, state)
+                except Exception as exc:
+                    return await self._research_task_failure_result(task, state, exc)
 
         results = await asyncio.gather(*(run_task(task) for task in tasks))
         return sorted(results, key=lambda item: item.index)
@@ -249,6 +261,35 @@ class SupervisorAgent:
         async with tool_span("conductResearch", "SupervisorAgent", state, "execute_tool conductResearch"):
             result = await self.researcher_agent.run(branch_state)
         return ResearchResult(task.index, task.title, task.research_topic, result, branch_state)
+
+    async def _research_task_failure_result(
+        self,
+        task: "ResearchTask",
+        state: DeepResearchState,
+        exc: Exception,
+    ) -> "ResearchResult":
+        logger.exception(
+            "research branch failed research_id=%s task_index=%s task_title=%s model_id=%s budget=%s",
+            state.research_id,
+            task.index,
+            task.title,
+            state.trace_metadata_model.model_id,
+            state.budget_name,
+        )
+        error_summary = summarize(f"{exc.__class__.__name__}: {exc}")
+        await event_publisher.publish_event(
+            state.research_id,
+            EventType.ERROR,
+            "研究分支失败: " + task.title,
+            error_summary,
+            state.current_supervisor_event_id,
+        )
+        detail = error_summary or "内部异常详情已写入后端日志。"
+        findings = (
+            "该研究分支执行失败，系统已保留其他分支结果并继续汇总。\n\n"
+            f"错误摘要：{detail}"
+        )
+        return ResearchResult(task.index, task.title, task.research_topic, findings, None)
 
     async def _summarize_supervisor_results(self, results: list["ResearchResult"], state: DeepResearchState) -> None:
         for result in results:
@@ -383,11 +424,28 @@ class ResearcherAgent:
                 COMPRESS_RESEARCH_HUMAN_MESSAGE.format(research_topic=state.research_topic or ""),
             ),
         )
-        response = await model_handler.get_chat_client(state.research_id).run_agent(
-            ResearchAgentRequest.text_only("ResearcherAgent", None, messages, state.trace_context()),
-        )
-        state.add_token_usage(response.token_usage)
-        compressed = response.ai_message.text
+        try:
+            response = await model_handler.get_chat_client(state.research_id).run_agent(
+                ResearchAgentRequest.text_only("ResearcherAgent", None, messages, state.trace_context()),
+            )
+            state.add_token_usage(response.token_usage)
+            compressed = response.ai_message.text
+        except Exception as exc:
+            logger.exception(
+                "research compression failed research_id=%s topic=%s model_id=%s budget=%s",
+                state.research_id,
+                state.research_topic,
+                state.trace_metadata_model.model_id,
+                state.budget_name,
+            )
+            await event_publisher.publish_event(
+                state.research_id,
+                EventType.ERROR,
+                "研究材料压缩失败，使用原始材料",
+                summarize(f"{exc.__class__.__name__}: {exc}"),
+                state.current_research_event_id,
+            )
+            compressed = self._fallback_compressed_research(state, exc)
         state.compressed_research = compressed
         preview = compressed[: min(200, len(compressed))] + "..."
         await event_publisher.publish_event(
@@ -398,6 +456,28 @@ class ResearcherAgent:
             state.current_research_event_id,
         )
         return compressed
+
+    @staticmethod
+    def _fallback_compressed_research(state: DeepResearchState, exc: Exception) -> str:
+        settings = get_settings()
+        max_chars = max(2000, min(8000, settings.research_report_findings_max_chars // 2))
+        parts = [
+            "## 研究主题",
+            state.research_topic or "未记录研究主题",
+            "## 降级说明",
+            "研究材料压缩阶段失败，系统已保留原始搜索结果和工具调用记录用于后续汇总。",
+            f"错误摘要：{_safe_error_summary(exc)}",
+        ]
+        if state.search_notes:
+            parts.extend(["## 搜索材料", "\n\n".join(state.search_notes)])
+        if state.researcher_notes:
+            parts.extend(["## 工具调用与分析记录", "\n\n".join(state.researcher_notes)])
+        if len(parts) == 5:
+            parts.extend(["## 可用材料", "该分支未记录到可用搜索材料。"])
+        text = "\n\n".join(parts)
+        if len(text) <= max_chars:
+            return text
+        return truncate(text, max_chars) + "\n\n[部分原始研究材料因长度限制已截断。]"
 
     def _reserve_search_slot(self, state: DeepResearchState) -> bool:
         if state.search_count >= state.budget.max_search_count:
@@ -585,17 +665,34 @@ class ReportAgent:
             date=today_str(),
             findings=self._bounded_findings(state.supervisor_notes),
         )
-        response = await model_handler.get_chat_client(state.research_id).run_agent(
-            ResearchAgentRequest.text_only(
-                "ReportAgent",
-                "",
-                [ResearchMessage.user(prompt)],
-                state.trace_context(),
-            ),
-        )
-        state.add_token_usage(response.token_usage)
-        state.report = response.ai_message.text
-        await event_publisher.publish_event(state.research_id, EventType.REPORT, "研究报告已完成", None)
+        try:
+            response = await model_handler.get_chat_client(state.research_id).run_agent(
+                ResearchAgentRequest.text_only(
+                    "ReportAgent",
+                    "",
+                    [ResearchMessage.user(prompt)],
+                    state.trace_context(),
+                ),
+            )
+            state.add_token_usage(response.token_usage)
+            state.report = response.ai_message.text
+            complete_title = "研究报告已完成"
+        except Exception as exc:
+            logger.exception(
+                "report generation failed research_id=%s model_id=%s budget=%s",
+                state.research_id,
+                state.trace_metadata_model.model_id,
+                state.budget_name,
+            )
+            await event_publisher.publish_event(
+                state.research_id,
+                EventType.ERROR,
+                "报告生成模型失败，使用兜底报告",
+                summarize(f"{exc.__class__.__name__}: {exc}"),
+            )
+            state.report = self._fallback_report(state, exc)
+            complete_title = "研究报告已完成（降级）"
+        await event_publisher.publish_event(state.research_id, EventType.REPORT, complete_title, None)
         await event_publisher.publish_message(state.research_id, "assistant", state.report)
         return state.report
 
@@ -606,6 +703,23 @@ class ReportAgent:
         if len(findings) <= max_chars:
             return findings
         return truncate(findings, max_chars) + "\n\n[部分研究材料因长度限制已截断，以上保留最相关的前序材料。]"
+
+    def _fallback_report(self, state: DeepResearchState, exc: Exception) -> str:
+        findings = self._bounded_findings(state.supervisor_notes)
+        return (
+            "# 研究报告（降级生成）\n\n"
+            "## 生成说明\n\n"
+            "最终报告模型生成阶段失败，系统已基于已收集的研究材料生成兜底报告，避免研究结果丢失。"
+            f"错误摘要：{_safe_error_summary(exc)}\n\n"
+            "## 研究方向\n\n"
+            f"{state.research_brief or '未记录研究方向。'}\n\n"
+            "## 已收集研究材料\n\n"
+            f"{findings or '未收集到可用研究材料。'}\n\n"
+            "## 后续建议\n\n"
+            "- 优先复核标记为失败或降级的研究分支。\n"
+            "- 对营养数值、单位换算和来源引用类结论进行人工校验。\n"
+            "- 如需更完整成稿，可在模型服务稳定后基于以上材料重新生成正式报告。\n"
+        )
 
 
 async def is_cancelled(research_id: str) -> bool:
