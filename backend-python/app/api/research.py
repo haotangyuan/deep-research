@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Header
 
 from app.core.auth import current_user_id
 from app.core.common import success
-from app.domain.dto import ConfirmDirectionReq, SendMessageReq
+from app.domain.dto import ConfirmDirectionReq, ResearchTitleReq, SendMessageReq
 from app.application.services import research_service
 from app.infrastructure.sse import sse_hub
 
@@ -39,6 +39,15 @@ async def get_research_status(research_id: str, user_id: int = Depends(current_u
 @router.get("/api/v1/research/{research_id}/messages")
 async def get_research_messages(research_id: str, user_id: int = Depends(current_user_id)):
     return success((await research_service.get_research_messages(user_id, research_id)).api_dump())
+
+
+@router.patch("/api/v1/research/{research_id}/title")
+async def update_research_title(
+    research_id: str,
+    req: ResearchTitleReq,
+    user_id: int = Depends(current_user_id),
+):
+    return success((await research_service.update_research_title(user_id, research_id, req)).api_dump())
 
 
 @router.post("/api/v1/research/{research_id}/messages")

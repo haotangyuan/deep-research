@@ -58,6 +58,7 @@ class ResearchTaskQueue:
     def __init__(self) -> None:
         self._queue: asyncio.Queue[tuple[str, DeepResearchState]] | None = None
         self._workers: list[asyncio.Task] = []
+        self._active_tasks: dict[str, asyncio.Task[None]] = {}
         self._active_count = 0
         self._started = False
         self._recovered = False
@@ -83,8 +84,16 @@ class ResearchTaskQueue:
         if self._workers:
             await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
+        self._active_tasks.clear()
         self._started = False
         self._recovered = False
+
+    def cancel(self, research_id: str) -> asyncio.Task[None] | None:
+        task = self._active_tasks.get(research_id)
+        if task is None or task.done():
+            return None
+        task.cancel()
+        return task
 
     async def submit(self, state: DeepResearchState) -> None:
         await self.start(recover=False)
@@ -118,11 +127,18 @@ class ResearchTaskQueue:
     async def _worker(self) -> None:
         assert self._queue is not None
         while True:
-            _, state = await self._queue.get()
+            research_id, state = await self._queue.get()
             try:
                 self._active_count += 1
-                await agent_pipeline._run_now(state)
+                task = asyncio.create_task(agent_pipeline._run_now(state), name=f"research-run-{research_id}")
+                self._active_tasks[research_id] = task
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    if asyncio.current_task() and asyncio.current_task().cancelling():
+                        raise
             finally:
+                self._active_tasks.pop(research_id, None)
                 self._active_count = max(0, self._active_count - 1)
                 self._queue.task_done()
 
@@ -315,6 +331,9 @@ class AgentPipeline:
         research_id = state.research_id
         resume_status = state.status
         try:
+            if await is_cancelled(research_id):
+                state.status = WorkflowStatus.CANCELLED
+                return
             with workflow_span(state):
                 state.status = WorkflowStatus.START
                 await update_research_session(research_id, WorkflowStatus.START, state)
@@ -322,7 +341,7 @@ class AgentPipeline:
                 if state.skip_scope_phase:
                     state.status = WorkflowStatus.IN_SCOPE
                     await update_research_session(research_id, WorkflowStatus.IN_SCOPE, state)
-                    await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
+                    await save_workflow_checkpoint(state)
                     if resume_status == WorkflowStatus.IN_REPORT and state.supervisor_notes:
                         await self._execute_report_only(state)
                     elif resume_status == WorkflowStatus.IN_RESEARCH and state.supervisor_notes:
@@ -356,7 +375,7 @@ class AgentPipeline:
                 await update_research_session(research_id, WorkflowStatus.IN_SCOPE, state)
 
                 if state.hitl_mode == "DIRECTION_ONLY":
-                    await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
+                    await save_workflow_checkpoint(state)
                     state.status = WorkflowStatus.AWAITING_DIRECTION_CONFIRM
                     await update_research_session(research_id, WorkflowStatus.AWAITING_DIRECTION_CONFIRM, state)
                     await event_publisher.publish_event(
@@ -376,6 +395,10 @@ class AgentPipeline:
                     return
 
                 await self._execute_phase_2_and_3(state)
+        except asyncio.CancelledError:
+            if await is_cancelled(research_id):
+                state.status = WorkflowStatus.CANCELLED
+            raise
         except Exception as exc:
             logger.exception(
                 "research pipeline failed research_id=%s status=%s model_id=%s budget=%s",
@@ -385,7 +408,7 @@ class AgentPipeline:
                 state.budget_name,
             )
             state.status = _checkpoint_status(state)
-            await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
+            await save_workflow_checkpoint(state)
             state.status = WorkflowStatus.FAILED
             await event_publisher.publish_event(
                 research_id,
@@ -411,7 +434,7 @@ class AgentPipeline:
 
         state.status = WorkflowStatus.IN_RESEARCH
         await update_research_session(research_id, WorkflowStatus.IN_RESEARCH, state)
-        await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
+        await save_workflow_checkpoint(state)
         async with stage_span("SupervisorAgent", state):
             await supervisor_agent.run(state)
 
@@ -433,7 +456,7 @@ class AgentPipeline:
             await update_research_session(research_id, WorkflowStatus.FAILED, state)
             return
         await update_research_session(research_id, WorkflowStatus.IN_RESEARCH, state)
-        await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
+        await save_workflow_checkpoint(state)
 
         if await is_cancelled(research_id):
             state.status = WorkflowStatus.CANCELLED
@@ -451,7 +474,7 @@ class AgentPipeline:
 
         state.status = WorkflowStatus.IN_REPORT
         await update_research_session(research_id, WorkflowStatus.IN_REPORT, state)
-        await get_cache().save_checkpoint(research_id, state.model_dump(mode="json"))
+        await save_workflow_checkpoint(state)
         async with stage_span("ReportAgent", state):
             await report_agent.run(state)
 
@@ -482,8 +505,6 @@ async def update_research_session(research_id: str, status: str, state: DeepRese
     set_complete = status in {
         WorkflowStatus.COMPLETED,
         WorkflowStatus.FAILED,
-        WorkflowStatus.NEED_CLARIFICATION,
-        WorkflowStatus.AWAITING_DIRECTION_CONFIRM,
         WorkflowStatus.CANCELLED,
     }
     sql = """
@@ -494,7 +515,7 @@ async def update_research_session(research_id: str, status: str, state: DeepRese
             total_output_tokens = :output_tokens
     """
     if set_start:
-        sql += ", start_time = NOW()"
+        sql += ", start_time = COALESCE(start_time, NOW()), complete_time = NULL"
     if set_complete:
         sql += ", complete_time = NOW()"
     sql += " WHERE id = :id"
@@ -513,3 +534,10 @@ async def update_research_session(research_id: str, status: str, state: DeepRese
 
 research_task_queue = ResearchTaskQueue()
 agent_pipeline = AgentPipeline()
+
+
+async def save_workflow_checkpoint(state: DeepResearchState) -> None:
+    snapshot = model_handler.snapshot(state.research_id)
+    if snapshot is not None:
+        state.agent_runtime_snapshot = snapshot
+    await get_cache().save_checkpoint(state.research_id, state.model_dump(mode="json"))

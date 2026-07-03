@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -31,6 +32,7 @@ from app.domain.state import DeepResearchState, TavilySearchResult
 from app.infrastructure.tavily import tavily_client
 from app.core.timeutil import today_str
 from app.application.tools import RESEARCHER_STAGE_TOOLS, execute_simple_tool
+from app.application.research_team import research_team
 
 
 logger = logging.getLogger(__name__)
@@ -175,6 +177,7 @@ class SupervisorAgent:
         )
         state.current_supervisor_event_id = supervisor_event_id
         tasks = await self._plan_research_tasks(state)
+        research_team.prepare(state.research_id, tasks)
         results = await self._execute_research_tasks(tasks, state)
         if await is_cancelled(state.research_id):
             state.status = WorkflowStatus.CANCELLED
@@ -225,27 +228,40 @@ class SupervisorAgent:
                 if not topic:
                     continue
                 title = str(node.get("title") or "").strip() or f"研究任务 {len(tasks) + 1}"
-                tasks.append(ResearchTask(len(tasks), title, topic))
+                index = len(tasks)
+                tasks.append(
+                    ResearchTask(
+                        index,
+                        title,
+                        topic,
+                        f"{state.research_id}-task-{index}",
+                        f"researcher-{index + 1}",
+                    ),
+                )
             return tasks or self._fallback_research_tasks(state)
         except Exception:
             return self._fallback_research_tasks(state)
 
     def _fallback_research_tasks(self, state: DeepResearchState) -> list["ResearchTask"]:
-        return [ResearchTask(0, "综合研究", state.research_brief or "")]
+        return [
+            ResearchTask(
+                0,
+                "综合研究",
+                state.research_brief or "",
+                f"{state.research_id}-task-0",
+                "researcher-1",
+            ),
+        ]
 
     async def _execute_research_tasks(self, tasks: list["ResearchTask"], state: DeepResearchState) -> list["ResearchResult"]:
-        parallelism = max(1, min(len(tasks), state.budget.max_concurrent_units))
-        semaphore = asyncio.Semaphore(parallelism)
-
-        async def run_task(task: ResearchTask) -> ResearchResult:
-            async with semaphore:
-                try:
-                    return await self._execute_research_task(task, state)
-                except Exception as exc:
-                    return await self._research_task_failure_result(task, state, exc)
-
-        results = await asyncio.gather(*(run_task(task) for task in tasks))
-        return sorted(results, key=lambda item: item.index)
+        return await research_team.execute(
+            state.research_id,
+            tasks,
+            state.budget.max_concurrent_units,
+            lambda task: self._execute_research_task(task, state),
+            lambda task, exc: self._research_task_failure_result(task, state, exc),
+            state.current_supervisor_event_id,
+        )
 
     async def _execute_research_task(self, task: "ResearchTask", state: DeepResearchState) -> "ResearchResult":
         if not self._reserve_conduct_slot(state):
@@ -257,7 +273,12 @@ class SupervisorAgent:
             task.research_topic,
             state.current_supervisor_event_id,
         )
-        branch_state = state.fork_for_research(task.research_topic, plan_event_id)
+        branch_state = state.fork_for_research(
+            task.research_topic,
+            plan_event_id,
+            task.worker_id,
+            task.task_id,
+        )
         async with tool_span("conductResearch", "SupervisorAgent", state, "execute_tool conductResearch"):
             result = await self.researcher_agent.run(branch_state)
         return ResearchResult(task.index, task.title, task.research_topic, result, branch_state)
@@ -426,7 +447,7 @@ class ResearcherAgent:
         )
         try:
             response = await model_handler.get_chat_client(state.research_id).run_agent(
-                ResearchAgentRequest.text_only("ResearcherAgent", None, messages, state.trace_context()),
+                ResearchAgentRequest.text_only("ResearchCompressorAgent", None, messages, state.trace_context()),
             )
             state.add_token_usage(response.token_usage)
             compressed = response.ai_message.text
@@ -568,7 +589,7 @@ class SearchAgent:
     async def _summarize_webpage_with_cache(self, state: DeepResearchState, url: str, content: str) -> dict:
         settings = get_settings()
         if not settings.research_search_summary_cache_enabled:
-            return await self._summarize_webpage(state, content)
+            return await self._summarize_webpage(state, content, self._summary_instance(state, content))
         key = (url.strip().lower(), hash(content))
         cached = self._summary_cache.get(key)
         if cached and cached[1] > time.time():
@@ -580,7 +601,7 @@ class SearchAgent:
             future: asyncio.Future[dict] = asyncio.get_running_loop().create_future()
             self._inflight[key] = future
         try:
-            summary = await self._summarize_webpage(state, content)
+            summary = await self._summarize_webpage(state, content, self._summary_instance(state, content))
             self._summary_cache[key] = (
                 summary,
                 time.time() + max(1, settings.research_search_summary_cache_ttl_minutes) * 60,
@@ -595,12 +616,13 @@ class SearchAgent:
             async with self._lock:
                 self._inflight.pop(key, None)
 
-    async def _summarize_webpage(self, state: DeepResearchState, content: str) -> dict:
+    async def _summarize_webpage(self, state: DeepResearchState, content: str, instance: str) -> dict:
         settings = get_settings()
         bounded = truncate(content, max(1000, settings.research_search_summary_raw_content_max_chars))
         prompt = SUMMARIZE_WEBPAGE_PROMPT.format(webpage_content=bounded, date=today_str())
         context = dict(state.trace_context())
         context["llm.timeout.seconds"] = max(5, settings.research_search_summary_timeout_seconds)
+        context["agent.instance"] = instance
         try:
             response = await model_handler.get_chat_client(state.research_id).run_agent(
                 ResearchAgentRequest.text_only("SearchAgent", "", [ResearchMessage.user(prompt)], context),
@@ -612,6 +634,11 @@ class SearchAgent:
                 "summary": truncate(content, max(300, settings.research_search_summary_fallback_content_max_chars)),
                 "key_excerpts": "",
             }
+
+    @staticmethod
+    def _summary_instance(state: DeepResearchState, content: str) -> str:
+        digest = hashlib.sha1(content.encode("utf-8")).hexdigest()[:12]
+        return f"{state.agent_worker_id or 'search'}:page:{digest}"
 
     def _prune_summary_cache(self) -> None:
         max_entries = max(1, get_settings().research_search_summary_cache_max_entries)
@@ -736,6 +763,8 @@ class ResearchTask:
     index: int
     title: str
     research_topic: str
+    task_id: str
+    worker_id: str
 
 
 @dataclass(frozen=True)

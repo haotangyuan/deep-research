@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Literal
 
@@ -35,6 +36,7 @@ class LoginResp(CamelModel):
 
 
 class UserInfoResp(CamelModel):
+    username: str
     avatar_url: str | None = None
 
 
@@ -63,6 +65,10 @@ class SendMessageReq(CamelModel):
 class ConfirmDirectionReq(CamelModel):
     action: Literal["APPROVE", "REVISE"] | str
     feedback: str | None = None
+
+
+class ResearchTitleReq(CamelModel):
+    title: str
 
 
 class CreateResearchResp(CamelModel):
@@ -120,6 +126,13 @@ class WorkflowEventDTO(CamelModel):
     def api_dump(self) -> dict[str, Any]:
         data = super().api_dump()
         data["createTime"] = format_datetime(self.create_time)
+        if self.type == "AGENT_RUNTIME" and self.content:
+            try:
+                metadata = json.loads(self.content)
+                if isinstance(metadata, dict):
+                    data["runtimeMetadata"] = metadata
+            except (TypeError, ValueError):
+                pass
         return {k: v for k, v in data.items() if v is not None}
 
 

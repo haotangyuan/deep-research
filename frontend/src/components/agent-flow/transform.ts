@@ -99,6 +99,9 @@ function extractUrls(content = '') {
 
 function eventKind(event: WorkflowEvent): AgentFlowNodeKind {
   const type = event.type?.toUpperCase();
+  if (type === 'AGENT_RUNTIME') {
+    return ['team_task', 'team_lifecycle'].includes(event.runtimeMetadata?.kind || '') ? 'subagent' : 'tool';
+  }
   if (type === 'ERROR') return 'error';
   if (type === 'CLARIFY_FORM' || type === 'DIRECTION_CONFIRM') return 'decision';
   if (type === 'REPORT') return 'artifact';
@@ -112,6 +115,10 @@ function eventKind(event: WorkflowEvent): AgentFlowNodeKind {
 
 function eventTitle(event: WorkflowEvent) {
   const type = event.type?.toUpperCase();
+  if (type === 'AGENT_RUNTIME') {
+    if (event.runtimeMetadata?.kind === 'team_lifecycle') return event.title || 'AgentScope Research Team';
+    return event.runtimeMetadata?.taskTitle || event.runtimeMetadata?.stage || event.title || 'AgentScope runtime';
+  }
   if (type === 'SEARCH' && /^正在搜索/.test(event.title || '')) return event.title;
   if (type === 'SEARCH') return event.title || 'Web search';
   if (type === 'RESEARCH' && /^分析中/.test(event.title || '')) return 'Think Tool';
@@ -119,6 +126,16 @@ function eventTitle(event: WorkflowEvent) {
 }
 
 function ownerAgentIdForEvent(event: WorkflowEvent, eventOwnerMap: Map<number, string>) {
+  if (event.type?.toUpperCase() === 'AGENT_RUNTIME') {
+    switch (event.runtimeMetadata?.stage) {
+      case 'ScopeAgent': return 'agent-scope';
+      case 'ResearcherAgent':
+      case 'ResearchCompressorAgent': return 'agent-researcher';
+      case 'SearchAgent': return 'agent-search';
+      case 'ReportAgent': return 'agent-report';
+      default: return 'agent-supervisor';
+    }
+  }
   switch (event.type?.toUpperCase()) {
     case 'SCOPE':
     case 'CLARIFY_FORM':
@@ -142,6 +159,16 @@ function ownerAgentIdForEvent(event: WorkflowEvent, eventOwnerMap: Map<number, s
 function groupForEvent(event: WorkflowEvent, ownerId: string) {
   const type = event.type?.toUpperCase();
   const title = event.title || '';
+
+  if (type === 'AGENT_RUNTIME') {
+    const isTask = ['team_task', 'team_lifecycle'].includes(event.runtimeMetadata?.kind || '');
+    return {
+      id: isTask ? 'agent-supervisor:agentscope-team' : `${ownerId}:agentscope-runtime`,
+      title: isTask ? 'AgentScope Research Team' : 'AgentScope Runtime',
+      subtitle: isTask ? 'native tasks and workers' : 'agent / model / tool lifecycle',
+      kind: (isTask ? 'subagent' : 'tool') as AgentFlowNodeKind,
+    };
+  }
 
   if (type === 'ERROR') {
     return {
@@ -395,8 +422,19 @@ export function buildAgentFlowModel(
     );
     attachEvent(groupNode.id, event);
 
-    const eventNodeId = `event-${event.id}`;
-    addNode(
+    const runtimeTaskId = event.runtimeMetadata?.kind === 'team_task' && event.runtimeMetadata.taskId;
+    const runtimeCallId = event.runtimeMetadata?.kind === 'agent_call'
+      ? [event.runtimeMetadata.stage || 'agent', event.runtimeMetadata.taskId || event.runtimeMetadata.workerId || 'main'].join('-')
+      : null;
+    const runtimeTeamId = event.runtimeMetadata?.kind === 'team_lifecycle'
+      ? `runtime-team-${event.runtimeMetadata.status || event.id}`
+      : null;
+    const eventNodeId = runtimeTaskId
+      ? `runtime-task-${runtimeTaskId}`
+      : runtimeCallId
+        ? `runtime-call-${runtimeCallId}`
+        : runtimeTeamId || `event-${event.id}`;
+    const eventNode = addNode(
       {
         id: eventNodeId,
         kind: eventKind(event),
@@ -410,9 +448,29 @@ export function buildAgentFlowModel(
         rawEvent: event,
         rawEvents: [event],
         eventIds: [event.id],
+        status: event.runtimeMetadata?.status,
       },
       groupNode.id,
     );
+    if (runtimeTaskId) {
+      eventNode.title = event.runtimeMetadata?.taskTitle || eventNode.title;
+      eventNode.subtitle = `${event.runtimeMetadata?.workerId || 'worker'} · ${event.runtimeMetadata?.status || 'pending'}`;
+      eventNode.status = event.runtimeMetadata?.status;
+      eventNode.content = event.content;
+      eventNode.timestamp = event.createTime;
+      eventNode.rawEvent = event;
+    }
+    if (runtimeCallId) {
+      eventNode.title = event.runtimeMetadata?.stage || eventNode.title;
+      eventNode.subtitle = [
+        event.runtimeMetadata?.modelCalls ? `${event.runtimeMetadata.modelCalls} model` : null,
+        event.runtimeMetadata?.toolCalls ? `${event.runtimeMetadata.toolCalls} tool` : null,
+        event.runtimeMetadata?.workerId,
+      ].filter(Boolean).join(' · ') || 'AgentScope runtime';
+      eventNode.status = event.runtimeMetadata?.status;
+      eventNode.timestamp = event.createTime;
+      eventNode.rawEvent = event;
+    }
     attachEvent(eventNodeId, event);
 
     extractUrls(event.content).forEach((url, index) => {

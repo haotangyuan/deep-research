@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import uuid
 
 from sqlalchemy import and_, desc, or_, select, text
@@ -21,13 +22,15 @@ from app.domain.dto import (
     RegisterReq,
     ResearchMessageResp,
     ResearchStatusResp,
+    ResearchTitleReq,
     SendMessageReq,
     SendMessageResp,
     UserInfoResp,
 )
 from app.infrastructure.llm import model_handler
+from app.infrastructure.sse import sse_hub
 from app.domain.models import ChatMessage, Model, ResearchSession, User, WorkflowEvent
-from app.application.pipeline import agent_pipeline
+from app.application.pipeline import agent_pipeline, research_task_queue
 from app.domain.runtime import ResearchMessage
 from app.domain.state import BudgetSnapshot, DeepResearchState, TraceMetadataModel
 from app.core.timeutil import now_local
@@ -79,7 +82,7 @@ class UserService:
             user = await session.get(User, user_id)
             if user is None:
                 raise UserError("用户不存在")
-            return UserInfoResp(avatar_url=user.avatar_url)
+            return UserInfoResp(username=user.username or str(user.id), avatar_url=user.avatar_url)
 
 
 class ModelService:
@@ -120,7 +123,10 @@ class ModelService:
                 raise ModelError("无权删除此模型")
             active_usage = await session.scalar(
                 select(ResearchSession)
-                .where(ResearchSession.model_id == model_id, ResearchSession.status.not_in(["COMPLETED", "FAILED"]))
+                .where(
+                    ResearchSession.model_id == model_id,
+                    ResearchSession.status.not_in(["COMPLETED", "FAILED", "CANCELLED", "ARCHIVED"]),
+                )
                 .limit(1),
             )
             if active_usage is not None:
@@ -225,6 +231,33 @@ class ResearchService:
             total_output_tokens=session_obj.total_output_tokens,
         )
 
+    async def update_research_title(
+        self,
+        user_id: int,
+        research_id: str,
+        req: ResearchTitleReq,
+    ) -> SendMessageResp:
+        title = req.title.strip()
+        if not title:
+            raise ResearchError("标题不能为空")
+        if len(title) > 200:
+            raise ResearchError("标题不能超过 200 个字符")
+        async with SessionLocal() as session:
+            result = await session.execute(
+                text(
+                    """
+                    UPDATE research_session
+                    SET title = :title, update_time = NOW()
+                    WHERE id = :id AND user_id = :user_id
+                    """,
+                ),
+                {"id": research_id, "user_id": user_id, "title": title},
+            )
+            await session.commit()
+            if result.rowcount == 0:
+                raise ResearchError("研究不存在或无权修改")
+        return SendMessageResp(id=research_id, content=title)
+
     async def send_message(self, user_id: int, research_id: str, req: SendMessageReq) -> SendMessageResp:
         async with SessionLocal() as session:
             session_obj = await session.get(ResearchSession, research_id)
@@ -242,7 +275,7 @@ class ResearchService:
             if not req.model_id:
                 raise ResearchError("模型不应为空")
             model_id = req.model_id
-            title = req.content[:20]
+            title = " ".join(req.content.split())[:200]
             budget = req.budget or "HIGH"
             await self._set_info_if_null(research_id, model_id, budget, title)
         model = await self.model_service.get_model_by_id(user_id, model_id)
@@ -272,6 +305,7 @@ class ResearchService:
                 db_messages,
                 hitl_mode,
             )
+        model_handler.restore(research_id, state.agent_runtime_snapshot)
         await agent_pipeline.run(state)
         return SendMessageResp(id=research_id, content="已接受任务")
 
@@ -411,6 +445,7 @@ class ResearchService:
             model_id = session_obj.model_id
         model = await self.model_service.get_model_by_id(user_id, model_id)
         model_handler.add_model(research_id, model)
+        model_handler.restore(research_id, state.agent_runtime_snapshot)
         if req.action == "APPROVE":
             await get_cache().save_message(research_id, "user", "确认研究方向，开始执行研究")
             state.skip_scope_phase = True
@@ -447,6 +482,10 @@ class ResearchService:
         await event_publisher.publish_event(research_id, EventType.ERROR, "研究已取消", None)
         await event_publisher.publish_message(research_id, "user", "用户取消了本次研究")
         await event_publisher.publish_message(research_id, "assistant", "研究已取消")
+        active_task = research_task_queue.cancel(research_id)
+        if active_task is not None:
+            await asyncio.gather(active_task, return_exceptions=True)
+        await sse_hub.complete(research_id, WorkflowStatus.CANCELLED)
         return SendMessageResp(id=research_id, content="研究已取消")
 
     async def archive_research(self, user_id: int, research_id: str) -> SendMessageResp:

@@ -44,7 +44,7 @@ export function UserMenu() {
           <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-green-500 rounded-full border-2 border-white" />
         </div>
         <div className="flex-1 text-left min-w-0">
-          <p className="text-sm font-medium text-gray-900 truncate">已登录用户</p>
+          <p className="text-sm font-medium text-gray-900 truncate" title={user?.username}>{user?.username}</p>
           <p className="text-xs text-gray-500 truncate">点击管理账户</p>
         </div>
         <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform shrink-0 ${isOpen ? 'rotate-180' : ''}`} />

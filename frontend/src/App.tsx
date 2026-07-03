@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, type PointerEvent as ReactPointerEvent } from 'react';
 import { Routes, Route, Navigate, useNavigate, useParams, useLocation } from 'react-router-dom';
-import { Plus, Loader2, Send, AlertCircle, Sparkles, Search, Brain, Globe, FileSearch, Zap, User, Bot, CheckCircle2, PanelLeftClose, PanelLeftOpen, MessageSquare, Clock, Coins, ChevronsUpDown, Copy, Archive, Trash2 } from 'lucide-react';
+import { Plus, Loader2, Send, AlertCircle, Sparkles, Search, Brain, Globe, FileSearch, Zap, User, Bot, CheckCircle2, XCircle, PanelLeftClose, PanelLeftOpen, MessageSquare, Clock, Coins, ChevronsUpDown, Copy, Archive, Trash2, Pencil, Check, X, Download } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
@@ -83,6 +83,7 @@ function getEventStyle(type: string) {
     case 'REPORT': return { icon: FileSearch, color: 'text-orange-600', bg: 'bg-orange-50' };
     case 'CLARIFY_FORM': return { icon: MessageSquare, color: 'text-amber-600', bg: 'bg-amber-50' };
     case 'ERROR': return { icon: AlertCircle, color: 'text-red-600', bg: 'bg-red-50' };
+    case 'AGENT_RUNTIME': return { icon: Bot, color: 'text-cyan-700', bg: 'bg-cyan-50' };
     default: return { icon: Zap, color: 'text-gray-600', bg: 'bg-gray-50' };
   }
 }
@@ -91,6 +92,7 @@ function getStatusIcon(status: string) {
   switch (status?.toUpperCase()) {
     case 'COMPLETED': return <CheckCircle2 className="w-4 h-4 text-green-500" />;
     case 'FAILED': return <AlertCircle className="w-4 h-4 text-red-500" />;
+    case 'CANCELLED': return <XCircle className="w-4 h-4 text-red-500" />;
     case 'NEW': return <div className="w-2 h-2 rounded-full bg-gray-300" />;
     case 'NEED_CLARIFICATION': return <MessageSquare className="w-4 h-4 text-amber-500" />;
     case 'AWAITING_DIRECTION_CONFIRM': return <AlertCircle className="w-4 h-4 text-orange-500" />;
@@ -109,6 +111,7 @@ function getStatusLabel(status?: string) {
   switch (status?.toUpperCase()) {
     case 'COMPLETED': return '已完成';
     case 'FAILED': return '失败';
+    case 'CANCELLED': return '已取消';
     case 'NEW': return '准备中';
     case 'NEED_CLARIFICATION': return '待澄清';
     case 'QUEUE': return '排队中';
@@ -256,12 +259,42 @@ function formatDuration(startTime?: string, completeTime?: string) {
   return diffMins > 0 ? `${diffMins}分${diffSecs}秒` : `${diffSecs}秒`;
 }
 
-function MessageMarkdown({ content, animateText = false }: { content: string; animateText?: boolean }) {
-  const animatedContent = useAnimatedText(animateText ? content : '', ' ');
-  const displayContent = animateText ? animatedContent : content;
+function isMainTimelineEvent(event: WorkflowEvent) {
+  if (event.type?.toUpperCase() !== 'AGENT_RUNTIME') return true;
+  return event.runtimeMetadata?.kind === 'team_lifecycle';
+}
+
+function displayTimelineEvent(event: WorkflowEvent): WorkflowEvent {
+  if (event.runtimeMetadata?.kind !== 'team_lifecycle') return event;
+  return {
+    ...event,
+    content: event.runtimeMetadata.summary || event.title,
+  };
+}
+
+function normalizeReportSources(content: string) {
+  const sourceSection = /(^|\n)(#{2,3}\s*(?:来源|参考资料|参考文献|Sources?|References?)\s*\n)([\s\S]*)$/i;
+  return content.replace(sourceSection, (_match, prefix: string, heading: string, body: string) => {
+    const normalizedBody = body
+      .trim()
+      .replace(/(?:^|\s+)(?=\[\d+\]\s)/g, '\n\n')
+      .trim();
+    return `${prefix}${heading}${normalizedBody}`;
+  });
+}
+
+function sanitizeDownloadName(title: string) {
+  const safe = title.trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ').slice(0, 80);
+  return safe || 'deep-research-report';
+}
+
+function MessageMarkdown({ content, animateText = false, normalizeSources = false }: { content: string; animateText?: boolean; normalizeSources?: boolean }) {
+  const preparedContent = normalizeSources ? normalizeReportSources(content) : content;
+  const animatedContent = useAnimatedText(animateText ? preparedContent : '', ' ');
+  const displayContent = animateText ? animatedContent : preparedContent;
 
   return (
-    <div className="prose prose-zinc prose-sm max-w-none text-[14px] leading-7 prose-headings:font-semibold prose-headings:text-gray-950 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-1 prose-pre:my-3 prose-pre:rounded-xl prose-pre:border prose-pre:border-gray-200 prose-pre:bg-gray-950 prose-code:rounded-md prose-code:bg-gray-100 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[0.85em] prose-code:font-medium prose-pre:prose-code:bg-transparent prose-pre:prose-code:p-0">
+    <div className="markdown-content prose prose-zinc prose-sm max-w-none text-[14px] leading-7 prose-headings:font-semibold prose-headings:text-gray-950 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-1 prose-pre:my-3 prose-pre:rounded-xl prose-pre:border prose-pre:border-gray-200 prose-pre:bg-gray-950 prose-code:rounded-md prose-code:bg-gray-100 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-[0.85em] prose-code:font-medium">
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{displayContent}</ReactMarkdown>
     </div>
   );
@@ -274,13 +307,49 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
   const [loading, setLoading] = useState(true);
   const [modelList, setModelList] = useState<ModelInfo[]>([]);
   const navigate = useNavigate();
-  const { id: currentId } = useParams();
   const location = useLocation();
+  const currentId = location.pathname.startsWith('/research/')
+    ? decodeURIComponent(location.pathname.slice('/research/'.length))
+    : undefined;
   const { isAuthenticated } = useAuth();
   const historyLoadInFlightRef = useRef(false);
   const pendingHistoryRefreshRef = useRef(false);
   const initialLoadRef = useRef(true);
   const [managingResearchId, setManagingResearchId] = useState<string | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    if (typeof window === 'undefined') return 288;
+    const cached = Number(window.localStorage.getItem('research-sidebar-width'));
+    return Number.isFinite(cached) ? Math.min(440, Math.max(240, cached)) : 288;
+  });
+  const resizeFrameRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem('research-sidebar-width', String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => () => {
+    if (resizeFrameRef.current) cancelAnimationFrame(resizeFrameRef.current);
+  }, []);
+
+  const handleResizeStart = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (resizeFrameRef.current) cancelAnimationFrame(resizeFrameRef.current);
+      resizeFrameRef.current = requestAnimationFrame(() => {
+        setSidebarWidth(Math.min(440, Math.max(240, moveEvent.clientX)));
+      });
+    };
+    const handlePointerUp = () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      if (resizeFrameRef.current) {
+        cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp, { once: true });
+  }, []);
 
   // 模型字典用于显示model name
   const modelDictionary = useMemo(() => {
@@ -301,6 +370,11 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
   }, [isAuthenticated]);
   
   const loadHistory = useCallback(async function loadHistoryInternal(options: { showSpinner?: boolean } = {}) {
+    if (!isAuthenticated) {
+      setHistory([]);
+      setLoading(false);
+      return;
+    }
     if (historyLoadInFlightRef.current) {
       pendingHistoryRefreshRef.current = true;
       return;
@@ -323,15 +397,20 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
         loadHistoryInternal();
       }
     }
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setHistory([]);
+      initialLoadRef.current = true;
+      return;
+    }
     loadHistory({ showSpinner: initialLoadRef.current });
     initialLoadRef.current = false;
     const handleRefresh = () => loadHistory();
     window.addEventListener(REFRESH_HISTORY_EVENT, handleRefresh);
     return () => window.removeEventListener(REFRESH_HISTORY_EVENT, handleRefresh);
-  }, [location.pathname, loadHistory]);
+  }, [isAuthenticated, location.pathname, loadHistory]);
 
   const hasActiveHistory = useMemo(() => history.some(item => ACTIVE_HISTORY_STATUSES.has(item.status?.toUpperCase() || '')), [history]);
 
@@ -398,7 +477,22 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
   const isArenaActive = location.pathname.startsWith('/arena');
 
   return (
-    <aside className={`flex shrink-0 flex-col border-r border-gray-200/80 bg-[#f7f8f5] transition-all duration-300 ease-in-out ${isOpen ? 'w-72 translate-x-0' : 'w-0 -translate-x-full overflow-hidden border-r-0 opacity-0'}`}>
+    <aside
+      className={`fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-gray-200/80 bg-[#f7f8f5] transition-[width,transform,opacity] duration-300 ease-in-out lg:relative lg:z-20 ${isOpen ? 'translate-x-0' : 'w-0 -translate-x-full overflow-hidden border-r-0 opacity-0'}`}
+      style={{ width: isOpen ? `min(${sidebarWidth}px, calc(100vw - 48px))` : 0 }}
+    >
+      {isOpen && (
+        <div
+          role="separator"
+          aria-label="调整侧边栏宽度"
+          aria-orientation="vertical"
+          aria-valuemin={240}
+          aria-valuemax={440}
+          aria-valuenow={sidebarWidth}
+          onPointerDown={handleResizeStart}
+          className="absolute right-0 top-0 z-30 hidden h-full w-2 translate-x-1 cursor-col-resize touch-none hover:bg-gray-900/5 lg:block"
+        />
+      )}
       <div className="border-b border-gray-200/80 px-4 py-4">
         <div className="flex items-center justify-between gap-3">
           <div className="flex min-w-0 items-center gap-3">
@@ -516,7 +610,7 @@ function Sidebar({ isOpen, toggle }: { isOpen: boolean; toggle: () => void }) {
                   <div className="flex items-start gap-3">
                     <div className={`mt-1 h-2 w-2 shrink-0 rounded-full ${getStatusDot(item.status)}`} />
                     <div className="min-w-0 flex-1 space-y-1.5 pr-12">
-                      <div className="truncate text-[13px] font-semibold leading-5">{item.title || 'Untitled'}</div>
+                      <div className="truncate text-[13px] font-semibold leading-5" title={item.title || 'Untitled'}>{item.title || 'Untitled'}</div>
                       <div className="flex min-w-0 items-center gap-2">
                         <span className={`inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${getStatusTone(item.status)}`}>
                           {getStatusIcon(item.status)}
@@ -645,6 +739,9 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
   const [clarifyTextInput, setClarifyTextInput] = useState("");
   const [isClarifyTextSubmitting, setIsClarifyTextSubmitting] = useState(false);
   const [isResumingFailedResearch, setIsResumingFailedResearch] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [isSavingTitle, setIsSavingTitle] = useState(false);
 
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -675,13 +772,13 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
   }, [id, refreshModelList]);
 
   useEffect(() => {
-    if (id) {
+    if (id && isAuthenticated) {
       loadResearch(id);
     } else {
       resetToNew();
     }
     return () => disconnectSSE();
-  }, [id]);
+  }, [id, isAuthenticated]);
 
   useEffect(() => {
     if ((viewState === 'chat' || viewState === 'failed') && timelineItems.length > 0) {
@@ -699,6 +796,8 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
 
   useEffect(() => {
     finalReportRef.current = null;
+    setIsEditingTitle(false);
+    setTitleDraft('');
   }, [currentResearch?.id]);
 
   useEffect(() => {
@@ -796,7 +895,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
   }, [prepareDraftResearch]);
 
   useEffect(() => {
-    if (!id) {
+    if (!id && isAuthenticated) {
       prepareDraftResearch();
       // 监听从终端状态研究跳转过来的消息
       const handleResend = (e: Event) => {
@@ -806,7 +905,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
       window.addEventListener('resend-message', handleResend);
       return () => window.removeEventListener('resend-message', handleResend);
     }
-  }, [id, prepareDraftResearch]);
+  }, [id, isAuthenticated, prepareDraftResearch]);
 
   const applyResearchSnapshot = useCallback((researchId: string, data: ResearchMessageResponse) => {
     const messages = data.messages || [];
@@ -1028,7 +1127,8 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
           setIsConnected(false);
           syncResearchSnapshot(researchId);
           return;
-       }
+        }
+        if (!msg.data?.trim()) return;
         try {
           const data = JSON.parse(msg.data);
           
@@ -1185,6 +1285,59 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
     }
   }, [currentResearch, connectSSE, syncResearchSnapshot]);
 
+  const startEditingTitle = useCallback(() => {
+    if (!currentResearch) return;
+    setTitleDraft(currentResearch.title || '');
+    setIsEditingTitle(true);
+  }, [currentResearch]);
+
+  const cancelEditingTitle = useCallback(() => {
+    setIsEditingTitle(false);
+    setTitleDraft('');
+  }, []);
+
+  const saveResearchTitle = useCallback(async () => {
+    if (!currentResearch || isSavingTitle) return;
+    const nextTitle = titleDraft.trim();
+    if (!nextTitle) {
+      setError('标题不能为空');
+      return;
+    }
+    setIsSavingTitle(true);
+    setError(null);
+    try {
+      const persistedTitle = await researchApi.updateTitle(currentResearch.id, nextTitle);
+      setCurrentResearch((previous) => previous ? { ...previous, title: persistedTitle } : previous);
+      window.dispatchEvent(new CustomEvent<HistoryUpdateDetail>(HISTORY_UPDATE_EVENT, {
+        detail: { id: currentResearch.id, title: persistedTitle },
+      }));
+      setIsEditingTitle(false);
+      setTitleDraft('');
+    } catch (editError: any) {
+      setError(editError?.message || '修改标题失败');
+    } finally {
+      setIsSavingTitle(false);
+    }
+  }, [currentResearch, isSavingTitle, titleDraft]);
+
+  const completedReport = useMemo(() => {
+    if (currentResearch?.status?.toUpperCase() !== 'COMPLETED') return null;
+    return [...currentResearch.messages].reverse().find((message) => message.role === 'assistant')?.content || null;
+  }, [currentResearch?.messages, currentResearch?.status]);
+
+  const downloadMarkdownReport = useCallback(() => {
+    if (!currentResearch || !completedReport) return;
+    const blob = new Blob([completedReport], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${sanitizeDownloadName(currentResearch.title)}.md`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  }, [completedReport, currentResearch]);
+
   const sendMessage = async () => {
     if (!inputValue.trim()) return;
     const content = inputValue.trim();
@@ -1279,7 +1432,10 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
     if (!currentResearch) return [];
     const items: TimelineItem[] = [];
     const messages = [...currentResearch.messages].sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
-    const events = [...currentResearch.events].sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
+    const events = currentResearch.events
+      .filter(isMainTimelineEvent)
+      .map(displayTimelineEvent)
+      .sort((a, b) => new Date(a.createTime).getTime() - new Date(b.createTime).getTime());
     let eventIdx = 0;
     const flushEvents = (untilTime: number | null) => {
       const group: WorkflowEvent[] = [];
@@ -1325,9 +1481,56 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
       {/* Header for Existing Chat */}
       {!isNewChat && currentResearch && (
         <div className={`z-10 shrink-0 border-b border-gray-200/70 bg-[#fbfbf8]/90 px-6 py-4 backdrop-blur transition-all duration-300 ${!sidebarOpen ? 'pl-16' : ''}`}>
-          <div className="mx-auto flex max-w-5xl items-start justify-between gap-4">
+          <div className="mx-auto flex max-w-5xl flex-col items-stretch justify-between gap-4 sm:flex-row sm:items-start">
             <div className="min-w-0">
-              <h2 className="truncate text-[17px] font-semibold tracking-tight text-gray-950">{currentResearch.title}</h2>
+              {isEditingTitle ? (
+                <div className="flex max-w-2xl items-center gap-2">
+                  <input
+                    value={titleDraft}
+                    onChange={(event) => setTitleDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') saveResearchTitle();
+                      if (event.key === 'Escape') cancelEditingTitle();
+                    }}
+                    maxLength={200}
+                    autoFocus
+                    aria-label="研究标题"
+                    className="min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-[15px] font-semibold text-gray-950 outline-none focus:border-gray-500 focus:ring-2 focus:ring-gray-950/5"
+                  />
+                  <button
+                    type="button"
+                    onClick={saveResearchTitle}
+                    disabled={isSavingTitle}
+                    aria-label="保存标题"
+                    className="rounded-lg p-2 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                  >
+                    {isSavingTitle ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelEditingTitle}
+                    aria-label="取消修改标题"
+                    className="rounded-lg p-2 text-gray-500 hover:bg-gray-100"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex min-w-0 items-start gap-1.5">
+                  <h2 className="min-w-0 break-words text-[17px] font-semibold leading-6 tracking-tight text-gray-950" title={currentResearch.title}>
+                    {currentResearch.title}
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={startEditingTitle}
+                    aria-label="修改研究标题"
+                    title="修改标题"
+                    className="mt-0.5 shrink-0 rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              )}
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <div className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium ${getStatusTone(currentResearch.status)}`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${isConnected ? 'animate-pulse bg-emerald-500' : getStatusDot(currentResearch.status)}`} />
@@ -1367,7 +1570,18 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
               </div>
             </div>
             {/* Cancel / Expand buttons */}
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
+              {completedReport && (
+                <button
+                  type="button"
+                  onClick={downloadMarkdownReport}
+                  className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3.5 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+                  title="下载 Markdown 报告"
+                >
+                  <Download className="h-4 w-4" />
+                  <span>导出 MD</span>
+                </button>
+              )}
               {currentResearch?.status?.toUpperCase() === 'FAILED' && (
                 <button
                   onClick={handleResumeFailedResearch}
@@ -1432,7 +1646,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
                           <span className="text-lg font-semibold tracking-tight text-gray-950">Final Report</span>
                         </div>
                         <article>
-                          <MessageMarkdown content={item.data.content} />
+                          <MessageMarkdown content={item.data.content} normalizeSources />
                         </article>
                       </div>
                     </div>
@@ -1752,15 +1966,24 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
 }
 
 function AppContent() {
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1024);
 
   return (
     <div className="relative flex h-[100dvh] overflow-hidden bg-white">
+      {sidebarOpen && (
+        <button
+          type="button"
+          className="fixed inset-0 z-30 bg-gray-950/10 backdrop-blur-[1px] lg:hidden"
+          aria-label="关闭侧边栏"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
       <Sidebar isOpen={sidebarOpen} toggle={() => setSidebarOpen(false)} />
       
       {!sidebarOpen && (
         <button 
             onClick={() => setSidebarOpen(true)}
+            aria-label="展开侧边栏"
             className="absolute top-3 left-3 z-50 p-2 bg-white/80 backdrop-blur border border-gray-200 rounded-lg shadow-sm hover:bg-gray-50 transition-all"
         >
             <PanelLeftOpen className="w-5 h-5 text-gray-600" />

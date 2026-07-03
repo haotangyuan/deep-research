@@ -83,6 +83,9 @@ class DeepResearchState(BaseModel):
 
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    agent_worker_id: str | None = None
+    agent_task_id: str | None = None
+    agent_runtime_snapshot: dict[str, Any] | None = None
 
     @property
     def trace_metadata(self) -> ResearchTraceMetadata:
@@ -96,9 +99,17 @@ class DeepResearchState(BaseModel):
             "model.id": meta.model_id,
             "budget.level": meta.budget_level,
             "agent.framework": meta.agent_framework,
+            "agent.worker.id": self.agent_worker_id,
+            "agent.task.id": self.agent_task_id,
         }
 
-    def fork_for_research(self, topic: str, research_event_id: int | None) -> "DeepResearchState":
+    def fork_for_research(
+        self,
+        topic: str,
+        research_event_id: int | None,
+        worker_id: str | None = None,
+        task_id: str | None = None,
+    ) -> "DeepResearchState":
         return DeepResearchState(
             research_id=self.research_id,
             chat_history=self.chat_history,
@@ -117,6 +128,8 @@ class DeepResearchState(BaseModel):
             search_notes=[],
             total_input_tokens=0,
             total_output_tokens=0,
+            agent_worker_id=worker_id,
+            agent_task_id=task_id,
         )
 
     def fork_for_search(self, query: str, max_results: int, topic: str) -> "DeepResearchState":
@@ -138,6 +151,8 @@ class DeepResearchState(BaseModel):
             search_notes=[],
             total_input_tokens=0,
             total_output_tokens=0,
+            agent_worker_id=self.agent_worker_id,
+            agent_task_id=self.agent_task_id,
         )
 
     def add_token_usage(self, token_usage: ResearchTokenUsage | None) -> None:

@@ -47,7 +47,7 @@ function detailLabel(kind?: string) {
 }
 
 export function AgentFlowPanel({ title, status, events, messages }: AgentFlowPanelProps) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1024);
   const [expandedNodeIds, setExpandedNodeIds] = useState<string[]>([]);
   const expandedNodeIdSet = useMemo(() => new Set(expandedNodeIds), [expandedNodeIds]);
   const model = useMemo(() => buildAgentFlowModel(events, messages, title, expandedNodeIdSet), [events, expandedNodeIdSet, messages, title]);
@@ -129,10 +129,10 @@ export function AgentFlowPanel({ title, status, events, messages }: AgentFlowPan
       />
     )}
     <aside
-      className={`flex h-full min-h-0 shrink-0 border-l border-gray-200/80 bg-[#f7f8f5] shadow-2xl shadow-gray-950/10 transition-[width,transform] duration-300 ease-in-out lg:relative lg:z-20 lg:shadow-none ${
+      className={`fixed inset-y-0 right-0 z-40 flex h-full min-h-0 shrink-0 border-l border-gray-200/80 bg-[#f7f8f5] shadow-2xl shadow-gray-950/10 transition-[width,transform] duration-300 ease-in-out lg:relative lg:z-20 lg:shadow-none ${
         isResizing ? 'select-none !transition-none' : ''
       }`}
-      style={{ width: open ? `${panelWidth}px` : '48px' }}
+      style={{ width: open ? `min(${panelWidth}px, 100vw)` : '48px' }}
     >
       {open && (
         <div

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import time
 from typing import Any
 
 from agentscope.agent import Agent, ReActConfig
@@ -13,7 +16,10 @@ from agentscope.permission import PermissionBehavior, PermissionDecision
 from agentscope.tool import ToolBase, ToolChunk, Toolkit
 
 from app.core.config import get_settings
+from app.core.constants import EventType
 from app.domain.models import Model
+from app.infrastructure.agentscope_runtime import AgentScopeRuntimeSession
+from app.infrastructure.events import event_publisher
 from app.infrastructure.observability import model_span
 from app.domain.runtime import (
     ResearchAgentRequest,
@@ -50,14 +56,16 @@ class ResearchDynamicTool(ToolBase):
 
 
 class AgentScopeChatClient:
-    def __init__(self, model_record: Model) -> None:
+    def __init__(self, research_id: str, model_record: Model) -> None:
         settings = get_settings()
         if not model_record or not model_record.id:
             raise ValueError("模型不应为空")
         credential = OpenAICredential(api_key=model_record.api_key or "", base_url=model_record.base_url)
+        self.research_id = research_id
         self.model_name = model_record.model
         self.framework = "agentscope-python"
         self.timeout = settings.llm_timeout
+        self.runtime = AgentScopeRuntimeSession(research_id)
         self.model = OpenAIChatModel(
             credential=credential,
             model=model_record.model,
@@ -71,16 +79,30 @@ class AgentScopeChatClient:
 
     async def run_agent(self, request: ResearchAgentRequest) -> ResearchChatResponse:
         request_summary = render_messages(request.messages)
+        started_at = time.perf_counter()
+        runtime_key, entry = self._runtime_entry(request)
+        before = entry.metrics.copy()
         async with model_span(
             self.model_name,
             self.framework,
             request_summary,
             len(request.tool_specifications),
         ) as span:
-            response = await asyncio.wait_for(
-                self._run_agent(request),
-                timeout=self._agent_timeout(request),
-            )
+            try:
+                response = await asyncio.wait_for(
+                    self._run_agent(request, entry.agent),
+                    timeout=self._agent_timeout(request),
+                )
+            except Exception:
+                summary = self.runtime.call_summary(
+                    runtime_key,
+                    before,
+                    request.stage_name,
+                    started_at,
+                    request.runtime_context,
+                )
+                await self._publish_runtime_summary(summary | {"status": "failed"})
+                raise
             span.set_attribute("gen_ai.usage.available", True)
             span.set_attribute("gen_ai.usage.input_tokens", response.token_usage.input_token_count)
             span.set_attribute("gen_ai.usage.output_tokens", response.token_usage.output_token_count)
@@ -89,18 +111,18 @@ class AgentScopeChatClient:
                 response.token_usage.input_token_count + response.token_usage.output_token_count,
             )
             span.set_attribute("gen_ai.response.finish_reason", response.finish_reason or "")
+            await self._publish_runtime_summary(
+                self.runtime.call_summary(
+                    runtime_key,
+                    before,
+                    request.stage_name,
+                    started_at,
+                    request.runtime_context,
+                ),
+            )
             return response
 
-    async def _run_agent(self, request: ResearchAgentRequest) -> ResearchChatResponse:
-        toolkit = self._toolkit(request)
-        system_prompt = self._merged_system_prompt(request)
-        agent = Agent(
-            name=request.stage_name,
-            system_prompt=system_prompt,
-            model=self.model,
-            toolkit=toolkit,
-            react_config=ReActConfig(max_iters=max(1, request.max_iterations)),
-        )
+    async def _run_agent(self, request: ResearchAgentRequest, agent: Agent) -> ResearchChatResponse:
         inputs = self._input_messages(request)
         final_msg: Msg | None = None
         text_parts: list[str] = []
@@ -124,6 +146,56 @@ class AgentScopeChatClient:
             token_usage=ResearchTokenUsage(input_tokens, output_tokens),
             finish_reason=None,
         )
+
+    def _runtime_entry(self, request: ResearchAgentRequest):
+        system_prompt = self._merged_system_prompt(request)
+        instance = str(
+            request.runtime_context.get("agent.instance")
+            or request.runtime_context.get("agent.worker.id")
+            or "main"
+        )
+        tool_names = ",".join(spec.name for spec in request.tool_specifications)
+        signature = hashlib.sha1(f"{system_prompt}|{tool_names}".encode()).hexdigest()[:10]
+        runtime_key = f"{request.stage_name}:{instance}:{signature}"
+        toolkit = self._toolkit(request)
+
+        def factory(state, middlewares):
+            return Agent(
+                name=f"{request.stage_name}-{instance}",
+                system_prompt=system_prompt,
+                model=self.model,
+                toolkit=toolkit,
+                middlewares=middlewares,
+                state=state,
+                context_config=self.runtime.context_config(),
+                react_config=ReActConfig(max_iters=max(1, request.max_iterations)),
+            )
+
+        max_tool_calls = max(1, request.max_iterations * max(1, len(request.tool_specifications)))
+        return runtime_key, self.runtime.get_or_create_agent(runtime_key, factory, max_tool_calls)
+
+    async def _publish_runtime_summary(self, summary: dict[str, Any]) -> None:
+        await event_publisher.publish_event(
+            self.research_id,
+            EventType.AGENT_RUNTIME,
+            f"{summary.get('stage') or 'Agent'} runtime {summary.get('status') or 'completed'}",
+            json.dumps(summary, ensure_ascii=False),
+        )
+
+    def snapshot(self) -> dict[str, Any]:
+        return self.runtime.snapshot()
+
+    def restore(self, snapshot: dict[str, Any] | None) -> None:
+        self.runtime.restore(snapshot)
+
+    def replace_tasks(self, tasks: list[dict[str, Any]]):
+        return self.runtime.replace_tasks(tasks)
+
+    def update_task(self, task_id: str, status: str, **metadata: Any):
+        return self.runtime.update_task(task_id, status, **metadata)
+
+    def tasks(self):
+        return self.runtime.tasks()
 
     def _agent_timeout(self, request: ResearchAgentRequest) -> float:
         override = request.runtime_context.get("llm.timeout.seconds")
@@ -187,7 +259,7 @@ class ModelHandler:
         self._clients: dict[str, AgentScopeChatClient] = {}
 
     def add_model(self, research_id: str, model_record: Model) -> None:
-        self._clients[research_id] = AgentScopeChatClient(model_record)
+        self._clients[research_id] = AgentScopeChatClient(research_id, model_record)
 
     def get_chat_client(self, research_id: str) -> AgentScopeChatClient:
         client = self._clients.get(research_id)
@@ -197,6 +269,22 @@ class ModelHandler:
 
     def remove_model(self, research_id: str) -> None:
         self._clients.pop(research_id, None)
+
+    def snapshot(self, research_id: str) -> dict[str, Any] | None:
+        client = self._clients.get(research_id)
+        return client.snapshot() if client is not None else None
+
+    def restore(self, research_id: str, snapshot: dict[str, Any] | None) -> None:
+        self.get_chat_client(research_id).restore(snapshot)
+
+    def replace_tasks(self, research_id: str, tasks: list[dict[str, Any]]):
+        return self.get_chat_client(research_id).replace_tasks(tasks)
+
+    def update_task(self, research_id: str, task_id: str, status: str, **metadata: Any):
+        return self.get_chat_client(research_id).update_task(task_id, status, **metadata)
+
+    def tasks(self, research_id: str):
+        return self.get_chat_client(research_id).tasks()
 
 
 model_handler = ModelHandler()

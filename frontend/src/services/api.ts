@@ -76,6 +76,25 @@ export interface WorkflowEvent {
   title: string;
   content: string;
   formData?: ClarificationForm;
+  runtimeMetadata?: {
+    kind?: 'agent_call' | 'team_task' | 'team_lifecycle' | string;
+    framework?: string;
+    stage?: string;
+    instance?: string;
+    workerId?: string;
+    taskId?: string;
+    taskIndex?: number;
+    taskTitle?: string;
+    status?: string;
+    durationMs?: number;
+    modelCalls?: number;
+    toolCalls?: number;
+    toolNames?: string[];
+    team?: string;
+    taskCount?: number;
+    maxConcurrency?: number;
+    summary?: string;
+  };
   parentEventId?: number;
   sequenceNo?: number;
   createTime: string;
@@ -274,5 +293,13 @@ export const researchApi = {
     if (response.data.code !== 0) {
       throw new Error(response.data.message || '删除失败');
     }
+  },
+
+  updateTitle: async (researchId: string, title: string): Promise<string> => {
+    const response = await researchClient.patch<Result<SendMessageResponse>>(`/${researchId}/title`, { title });
+    if (response.data.code !== 0) {
+      throw new Error(response.data.message || '修改标题失败');
+    }
+    return response.data.data.content;
   },
 };
