@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本仓库当前开发入口是 `backend-python/` 和 `frontend/`。
+本仓库当前开发入口是 `backend-python/` 和 `frontend/`。。
 
 ## 常用命令
 
