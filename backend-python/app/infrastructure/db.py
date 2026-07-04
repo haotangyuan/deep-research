@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
+from app.domain.models import Base
 
 
 settings = get_settings()
@@ -19,3 +20,8 @@ async def get_db() -> AsyncIterator[AsyncSession]:
 
 async def close_db() -> None:
     await engine.dispose()
+
+
+async def ensure_tables() -> None:
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)

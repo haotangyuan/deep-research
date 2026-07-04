@@ -4,16 +4,19 @@ import { Plus, Loader2, Send, AlertCircle, Sparkles, Search, Brain, Globe, FileS
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
-import { researchApi, modelApi, ResearchStatusResponse, ChatMessage, WorkflowEvent, ModelInfo, SendMessageRequest, DirectionAction, ResearchMessageResponse } from './services/api';
+import { researchApi, modelApi, ResearchStatusResponse, ChatMessage, WorkflowEvent, ModelInfo, SendMessageRequest, DirectionAction, ResearchMessageResponse, ResearchIntervention } from './services/api';
 import { getToken } from './services/auth';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/AuthModal';
 import { UserMenu } from './components/UserMenu';
 import { ModelManagerModal } from './components/ModelManagerModal';
+import { InterventionModal } from './components/InterventionModal';
 import { AgentFlowPanel } from './components/agent-flow/AgentFlowPanel';
 import { AI_Prompt, type AnimatedAIInputOption } from './components/ui/animated-ai-input';
 import { useAnimatedText } from './components/ui/animated-text';
 import { BUDGET_OPTIONS, BudgetValue } from './constants/budget';
+import { summarizeIntervention } from './features/interventions';
+import { useResearchIntervention } from './features/useResearchIntervention';
 import ArenaPage from './pages/ArenaPage';
 
 // --- Types & Helpers ---
@@ -28,6 +31,7 @@ interface ResearchState {
   status: string;
   messages: ChatMessage[];
   events: WorkflowEvent[];
+  pendingIntervention?: ResearchIntervention;
   startTime?: string;
   completeTime?: string;
   totalInputTokens?: number;
@@ -81,6 +85,7 @@ function getEventStyle(type: string) {
     case 'RESEARCH': return { icon: Search, color: 'text-blue-600', bg: 'bg-blue-50' };
     case 'SEARCH': return { icon: Globe, color: 'text-green-600', bg: 'bg-green-50' };
     case 'REPORT': return { icon: FileSearch, color: 'text-orange-600', bg: 'bg-orange-50' };
+    case 'INTERVENTION': return { icon: Sparkles, color: 'text-fuchsia-700', bg: 'bg-fuchsia-50' };
     case 'CLARIFY_FORM': return { icon: MessageSquare, color: 'text-amber-600', bg: 'bg-amber-50' };
     case 'ERROR': return { icon: AlertCircle, color: 'text-red-600', bg: 'bg-red-50' };
     case 'AGENT_RUNTIME': return { icon: Bot, color: 'text-cyan-700', bg: 'bg-cyan-50' };
@@ -743,7 +748,6 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
   const [titleDraft, setTitleDraft] = useState('');
   const [isSavingTitle, setIsSavingTitle] = useState(false);
 
-
   const abortControllerRef = useRef<AbortController | null>(null);
   const cancelledRef = useRef(false);  // 取消标记，阻止残余 SSE 事件
   const processedIdsRef = useRef<Set<string>>(new Set());
@@ -928,6 +932,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
         title: data.title || prev.title,
         modelId: data.modelId || prev.modelId,
         budget: data.budget ?? prev.budget,
+        pendingIntervention: data.pendingIntervention,
         totalInputTokens: data.totalInputTokens ?? prev.totalInputTokens,
         totalOutputTokens: data.totalOutputTokens ?? prev.totalOutputTokens,
         startTime: data.startTime ?? prev.startTime,
@@ -1004,7 +1009,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
         budget: status.budget || undefined,
         status: status.status,
         messages: [],
-        events: []
+        events: [],
       };
 
       if (status.status === 'NEW') {
@@ -1023,6 +1028,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
         newState.messages = msgData.messages;
         newState.events = msgData.events;
         newState.status = msgData.status || newState.status;
+        newState.pendingIntervention = msgData.pendingIntervention;
         newState.startTime = msgData.startTime;
         newState.completeTime = msgData.completeTime;
         newState.totalInputTokens = msgData.totalInputTokens;
@@ -1159,6 +1165,20 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
       }
     });
   }, [clientId, syncResearchSnapshot]);
+
+  const {
+    canAdjustIntervention,
+    interventionError,
+    isInterventionModalOpen,
+    isSubmittingIntervention,
+    closeInterventionModal,
+    openInterventionModal,
+    submitIntervention,
+  } = useResearchIntervention({
+    research: currentResearch,
+    connectSSE,
+    syncResearchSnapshot,
+  });
 
   // HITL 方向确认处理（在 connectSSE 之后定义，避免循环引用）
   const handleHitlConfirm = useCallback(async (action: DirectionAction, feedback?: string) => {
@@ -1372,7 +1392,7 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
           modelId: selectedModelId,
           status: 'RUNNING',
           messages: [tempMessage],
-          events: []
+          events: [],
         });
         processedIdsRef.current.clear();
         setViewState('chat');
@@ -1568,9 +1588,31 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
                   </div>
                 )}
               </div>
+              {currentResearch.pendingIntervention && (
+                <div className="mt-3 rounded-2xl border border-fuchsia-200 bg-fuchsia-50 px-4 py-3 text-sm text-fuchsia-900">
+                  <div className="flex items-start gap-2">
+                    <Sparkles className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div>
+                      <p className="font-medium">下一轮待应用调整</p>
+                      <p className="mt-1 text-fuchsia-800/90">{summarizeIntervention(currentResearch.pendingIntervention) || '已记录下一轮偏置。'}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
             {/* Cancel / Expand buttons */}
             <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
+              {canAdjustIntervention && (
+                <button
+                  type="button"
+                  onClick={openInterventionModal}
+                  className="flex items-center gap-2 rounded-xl border border-fuchsia-200 bg-fuchsia-50 px-3.5 py-2 text-sm font-semibold text-fuchsia-800 transition-colors hover:bg-fuchsia-100"
+                  title="调整下一轮"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  <span>{currentResearch.pendingIntervention ? '替换下一轮调整' : '追加关注点'}</span>
+                </button>
+              )}
               {completedReport && (
                 <button
                   type="button"
@@ -1952,8 +1994,18 @@ function ResearchPage({ sidebarOpen = true }: { sidebarOpen?: boolean }) {
       status={currentResearch ? getStatusLabel(currentResearch.status) : '等待会话事件'}
       events={currentResearch?.events || []}
       messages={currentResearch?.messages || []}
+      showInterventionAction={canAdjustIntervention}
+      onOpenInterventionModal={openInterventionModal}
     />
     </div>
+    <InterventionModal
+      isOpen={isInterventionModalOpen}
+      pendingIntervention={currentResearch?.pendingIntervention}
+      isSubmitting={isSubmittingIntervention}
+      error={interventionError}
+      onClose={closeInterventionModal}
+      onSubmit={submitIntervention}
+    />
     <ModelManagerModal
       isOpen={isModelManagerOpen}
       onClose={() => setIsModelManagerOpen(false)}

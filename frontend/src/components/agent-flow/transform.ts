@@ -103,7 +103,9 @@ function eventKind(event: WorkflowEvent): AgentFlowNodeKind {
     return ['team_task', 'team_lifecycle'].includes(event.runtimeMetadata?.kind || '') ? 'subagent' : 'tool';
   }
   if (type === 'ERROR') return 'error';
+  if (type === 'INTERVENTION') return 'decision';
   if (type === 'CLARIFY_FORM' || type === 'DIRECTION_CONFIRM') return 'decision';
+  if (type === 'SUPERVISOR' && (/^动态决策：/.test(event.title || '') || /^报告前验证/.test(event.title || ''))) return 'decision';
   if (type === 'REPORT') return 'artifact';
   if (type === 'SEARCH') return 'tool';
   if (type === 'RESEARCH' && /^分析中/.test(event.title || '')) return 'tool';
@@ -141,6 +143,8 @@ function ownerAgentIdForEvent(event: WorkflowEvent, eventOwnerMap: Map<number, s
     case 'CLARIFY_FORM':
     case 'DIRECTION_CONFIRM':
       return 'agent-scope';
+    case 'INTERVENTION':
+      return 'agent-supervisor';
     case 'SUPERVISOR':
       return 'agent-supervisor';
     case 'RESEARCH':
@@ -205,6 +209,22 @@ function groupForEvent(event: WorkflowEvent, ownerId: string) {
   }
 
   if (ownerId === 'agent-supervisor') {
+    if (type === 'INTERVENTION') {
+      return {
+        id: 'agent-supervisor:interventions',
+        title: '下一轮用户干预',
+        subtitle: 'pending / applied / expired',
+        kind: 'decision' as AgentFlowNodeKind,
+      };
+    }
+    if (/^动态决策：/.test(title) || /^报告前验证/.test(title)) {
+      return {
+        id: 'agent-supervisor:decisions',
+        title: '动态决策与报告闸门',
+        subtitle: 'continue / report / gate',
+        kind: 'decision' as AgentFlowNodeKind,
+      };
+    }
     if (/拆解|规划/.test(title)) {
       return {
         id: 'agent-supervisor:plan',

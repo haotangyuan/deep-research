@@ -7,9 +7,16 @@ from datetime import timedelta
 from sqlalchemy import select, text
 
 from app.application.agents import is_cancelled, report_agent, scope_agent, supervisor_agent
+from app.application.interventions import (
+    dynamic_round_limit,
+    expire_pending_interventions,
+    has_pending_intervention,
+    is_ultra_dynamic_budget,
+)
+from app.application.ultra_dynamic import build_report_quality_context, render_report_quality_markdown
 from app.infrastructure.cache import get_cache, sequence_util
 from app.core.config import get_settings
-from app.core.constants import EventType, WorkflowStatus
+from app.core.constants import EventType, WorkflowMode, WorkflowStatus
 from app.infrastructure.db import SessionLocal
 from app.infrastructure.events import event_publisher
 from app.infrastructure.llm import model_handler
@@ -245,6 +252,8 @@ class ResearchTaskQueue:
                 max_concurrent_units=budget_level.max_concurrent_units,
             )
             state.budget_name = budget_name
+            state.workflow_mode = WorkflowMode.ULTRA_DYNAMIC if is_ultra_dynamic_budget(budget_name) else WorkflowMode.FIXED
+            state.dynamic_max_rounds = dynamic_round_limit() if is_ultra_dynamic_budget(budget_name) else 1
             state.total_input_tokens = int(session_obj.total_input_tokens or state.total_input_tokens or 0)
             state.total_output_tokens = int(session_obj.total_output_tokens or state.total_output_tokens or 0)
             if latest_user_text == CONFIRMED_DIRECTION_MESSAGE:
@@ -274,6 +283,8 @@ class ResearchTaskQueue:
             research_id=session_obj.id,
             chat_history=chat_history,
             status=WorkflowStatus.QUEUE,
+            workflow_mode=WorkflowMode.ULTRA_DYNAMIC if is_ultra_dynamic_budget(budget_name) else WorkflowMode.FIXED,
+            dynamic_max_rounds=dynamic_round_limit() if is_ultra_dynamic_budget(budget_name) else 1,
             trace_metadata_model=self._trace_metadata(session_obj, budget_name),
             budget=BudgetSnapshot(
                 max_conduct_count=budget_level.max_conduct_count,
@@ -426,6 +437,10 @@ class AgentPipeline:
                 pass
 
     async def _execute_phase_2_and_3(self, state: DeepResearchState) -> None:
+        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
+            await self._execute_ultra_dynamic_phase_and_3(state)
+            return
+
         research_id = state.research_id
         if await is_cancelled(research_id):
             state.status = WorkflowStatus.CANCELLED
@@ -465,12 +480,107 @@ class AgentPipeline:
 
         await self._execute_report_only(state)
 
+    async def _execute_ultra_dynamic_phase_and_3(self, state: DeepResearchState) -> None:
+        research_id = state.research_id
+        while True:
+            if await is_cancelled(research_id):
+                state.status = WorkflowStatus.CANCELLED
+                await update_research_session(research_id, WorkflowStatus.CANCELLED, state)
+                return
+
+            state.status = WorkflowStatus.IN_RESEARCH
+            state.dynamic_round_no += 1
+            await update_research_session(research_id, WorkflowStatus.IN_RESEARCH, state)
+            await save_workflow_checkpoint(state)
+            async with stage_span("SupervisorAgent", state):
+                await supervisor_agent.run(state)
+
+            if state.status == WorkflowStatus.FAILED:
+                await event_publisher.publish_event(research_id, EventType.ERROR, "研究规划失败", None)
+                await update_research_session(research_id, WorkflowStatus.FAILED, state)
+                return
+            if state.status == WorkflowStatus.CANCELLED:
+                await update_research_session(research_id, WorkflowStatus.CANCELLED, state)
+                return
+            if state.status != WorkflowStatus.IN_RESEARCH:
+                state.status = WorkflowStatus.FAILED
+                await event_publisher.publish_event(
+                    research_id,
+                    EventType.ERROR,
+                    "研究规划状态异常",
+                    "status=" + str(state.status),
+                )
+                await update_research_session(research_id, WorkflowStatus.FAILED, state)
+                return
+            await update_research_session(research_id, WorkflowStatus.IN_RESEARCH, state)
+            await save_workflow_checkpoint(state)
+
+            pending = await has_pending_intervention(research_id)
+            continue_for_decision = bool((state.latest_dynamic_decision or {}).get("nextAction") == "continue")
+            if state.conduct_count >= state.budget.max_conduct_count:
+                if pending:
+                    await expire_pending_interventions(research_id, "研究任务预算已耗尽，未能继续追加下一轮规划。", "budget_exhausted")
+                    await event_publisher.publish_event(
+                        research_id,
+                        EventType.INTERVENTION,
+                        "待生效调整已过期",
+                        "研究任务预算已耗尽，未能继续追加下一轮规划。",
+                    )
+                    await event_publisher.publish_message(
+                        research_id,
+                        "assistant",
+                        "待生效的下一轮调整未能执行：当前 ULTRA 研究任务预算已耗尽。",
+                    )
+                if continue_for_decision:
+                    state.report_quality_context = build_report_quality_context(
+                        state.latest_dynamic_decision,
+                        "研究任务预算已耗尽，无法继续补强缺口。",
+                    )
+                break
+
+            should_continue = pending or continue_for_decision
+            if not should_continue:
+                break
+
+            if state.dynamic_round_no >= max(1, state.dynamic_max_rounds):
+                if pending:
+                    await expire_pending_interventions(research_id, "已达到 ULTRA 动态最大轮次，未能继续追加下一轮规划。", "max_rounds")
+                    await event_publisher.publish_event(
+                        research_id,
+                        EventType.INTERVENTION,
+                        "待生效调整已过期",
+                        "已达到 ULTRA 动态最大轮次，未能继续追加下一轮规划。",
+                    )
+                    await event_publisher.publish_message(
+                        research_id,
+                        "assistant",
+                        "待生效的下一轮调整未能执行：本次 ULTRA 动态工作流已达到最大轮次。",
+                    )
+                if continue_for_decision:
+                    state.report_quality_context = build_report_quality_context(
+                        state.latest_dynamic_decision,
+                        "已达到 ULTRA 动态最大轮次，无法继续补强缺口。",
+                    )
+                break
+
+            if continue_for_decision:
+                await event_publisher.publish_message(
+                    research_id,
+                    "assistant",
+                    f"系统将在第 {state.dynamic_round_no + 1} 轮继续补强当前证据缺口。",
+                )
+
+        await self._execute_report_only(state)
+
     async def _execute_report_only(self, state: DeepResearchState) -> None:
         research_id = state.research_id
         if await is_cancelled(research_id):
             state.status = WorkflowStatus.CANCELLED
             await update_research_session(research_id, WorkflowStatus.CANCELLED, state)
             return
+
+        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
+            await self._apply_ultra_report_gate(state)
 
         state.status = WorkflowStatus.IN_REPORT
         await update_research_session(research_id, WorkflowStatus.IN_REPORT, state)
@@ -498,6 +608,24 @@ class AgentPipeline:
 
         state.status = WorkflowStatus.COMPLETED
         await update_research_session(research_id, WorkflowStatus.COMPLETED, state)
+
+    async def _apply_ultra_report_gate(self, state: DeepResearchState) -> None:
+        context = state.report_quality_context or build_report_quality_context(state.latest_dynamic_decision)
+        state.report_quality_context = context
+        title = "报告前验证通过" if context.get("status") == "ready" else "报告前验证未完全通过"
+        await event_publisher.publish_event(
+            state.research_id,
+            EventType.SUPERVISOR,
+            title,
+            render_report_quality_markdown(context),
+            state.current_supervisor_event_id,
+        )
+        if context.get("status") != "ready":
+            await event_publisher.publish_message(
+                state.research_id,
+                "assistant",
+                "报告前验证发现仍有证据缺口，最终报告会明确标注不确定性与未覆盖部分。",
+            )
 
 
 async def update_research_session(research_id: str, status: str, state: DeepResearchState) -> None:

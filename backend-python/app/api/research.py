@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Header
 
 from app.core.auth import current_user_id
 from app.core.common import success
-from app.domain.dto import ConfirmDirectionReq, ResearchTitleReq, SendMessageReq
+from app.domain.dto import ConfirmDirectionReq, CreateInterventionReq, ResearchTitleReq, SendMessageReq
 from app.application.services import research_service
 from app.infrastructure.sse import sse_hub
 
@@ -58,6 +58,11 @@ async def send_message(research_id: str, req: SendMessageReq, user_id: int = Dep
 @router.post("/api/v1/research/{research_id}/direction-action")
 async def confirm_direction(research_id: str, req: ConfirmDirectionReq, user_id: int = Depends(current_user_id)):
     return success((await research_service.confirm_direction(user_id, research_id, req)).api_dump())
+
+
+@router.post("/api/v1/research/{research_id}/interventions")
+async def create_intervention(research_id: str, req: CreateInterventionReq, user_id: int = Depends(current_user_id)):
+    return success((await research_service.create_intervention(user_id, research_id, req)).api_dump())
 
 
 @router.post("/api/v1/research/{research_id}/cancel")

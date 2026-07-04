@@ -71,6 +71,13 @@ class ResearchTitleReq(CamelModel):
     title: str
 
 
+class CreateInterventionReq(CamelModel):
+    focus_sections: list[str] = Field(default_factory=list)
+    reinforce_modes: list[Literal["official", "data", "comparison", "latest"] | str] = Field(default_factory=list)
+    note: str | None = None
+    replace_pending: bool = False
+
+
 class CreateResearchResp(CamelModel):
     research_ids: list[str]
 
@@ -136,6 +143,34 @@ class WorkflowEventDTO(CamelModel):
         return {k: v for k, v in data.items() if v is not None}
 
 
+class InterventionResp(CamelModel):
+    id: int | None = None
+    research_id: str
+    user_id: int
+    status: str
+    focus_sections: list[str] = Field(default_factory=list)
+    reinforce_modes: list[str] = Field(default_factory=list)
+    note: str | None = None
+    requested_round_no: int | None = None
+    target_round_no: int | None = None
+    applied_round_no: int | None = None
+    apply_summary: dict[str, Any] | None = None
+    reject_code: str | None = None
+    reject_reason: str | None = None
+    create_time: datetime | None = None
+    update_time: datetime | None = None
+    applied_time: datetime | None = None
+    expired_time: datetime | None = None
+
+    def api_dump(self) -> dict[str, Any]:
+        data = super().api_dump()
+        data["createTime"] = format_datetime(self.create_time)
+        data["updateTime"] = format_datetime(self.update_time)
+        data["appliedTime"] = format_datetime(self.applied_time)
+        data["expiredTime"] = format_datetime(self.expired_time)
+        return {k: v for k, v in data.items() if v is not None}
+
+
 class TimelineItem(CamelModel):
     kind: str
     research_id: str
@@ -164,6 +199,8 @@ class ResearchMessageResp(CamelModel):
     budget: str | None = None
     messages: list[ChatMessageDTO]
     events: list[WorkflowEventDTO]
+    pending_intervention: InterventionResp | None = None
+    recent_interventions: list[InterventionResp] = Field(default_factory=list)
     start_time: datetime | None = None
     update_time: datetime | None = None
     complete_time: datetime | None = None
@@ -179,6 +216,8 @@ class ResearchMessageResp(CamelModel):
             "budget": self.budget,
             "messages": [item.api_dump() for item in self.messages],
             "events": [item.api_dump() for item in self.events],
+            "pendingIntervention": self.pending_intervention.api_dump() if self.pending_intervention else None,
+            "recentInterventions": [item.api_dump() for item in self.recent_interventions],
             "startTime": format_datetime(self.start_time),
             "updateTime": format_datetime(self.update_time),
             "completeTime": format_datetime(self.complete_time),

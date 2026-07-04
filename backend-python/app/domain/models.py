@@ -75,3 +75,91 @@ class WorkflowEvent(Base):
     parent_event_id: Mapped[int | None] = mapped_column(BigInteger)
     sequence_no: Mapped[int] = mapped_column(Integer)
     create_time: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ResearchIntervention(Base):
+    __tablename__ = "research_intervention"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    research_id: Mapped[str] = mapped_column(String(32), index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    focus_sections_json: Mapped[str] = mapped_column(Text)
+    reinforce_modes_json: Mapped[str] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    replace_mode: Mapped[str | None] = mapped_column(String(32))
+    requested_round_no: Mapped[int | None] = mapped_column(Integer)
+    target_round_no: Mapped[int | None] = mapped_column(Integer)
+    applied_round_no: Mapped[int | None] = mapped_column(Integer)
+    superseded_by_id: Mapped[int | None] = mapped_column(BigInteger)
+    apply_summary_json: Mapped[str | None] = mapped_column(Text)
+    reject_code: Mapped[str | None] = mapped_column(String(64))
+    reject_reason: Mapped[str | None] = mapped_column(Text)
+    create_time: Mapped[datetime | None] = mapped_column(DateTime)
+    update_time: Mapped[datetime | None] = mapped_column(DateTime)
+    applied_time: Mapped[datetime | None] = mapped_column(DateTime)
+    expired_time: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ResearchPlanningRound(Base):
+    __tablename__ = "research_planning_round"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    research_id: Mapped[str] = mapped_column(String(32), index=True)
+    round_no: Mapped[int] = mapped_column(Integer, index=True)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    round_goal: Mapped[str | None] = mapped_column(Text)
+    intervention_id: Mapped[int | None] = mapped_column(BigInteger)
+    planner_bias_json: Mapped[str | None] = mapped_column(Text)
+    summary_json: Mapped[str | None] = mapped_column(Text)
+    create_time: Mapped[datetime | None] = mapped_column(DateTime)
+    update_time: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_time: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ResearchWorkItem(Base):
+    __tablename__ = "research_work_item"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    research_id: Mapped[str] = mapped_column(String(32), index=True)
+    round_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    round_no: Mapped[int] = mapped_column(Integer, index=True)
+    task_key: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(256))
+    description: Mapped[str | None] = mapped_column(Text)
+    priority: Mapped[str | None] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    result_summary: Mapped[str | None] = mapped_column(Text)
+    verification_state: Mapped[str | None] = mapped_column(String(32))
+    create_time: Mapped[datetime | None] = mapped_column(DateTime)
+    update_time: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ResearchDecisionLog(Base):
+    __tablename__ = "research_decision_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    research_id: Mapped[str] = mapped_column(String(32), index=True)
+    round_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    round_no: Mapped[int | None] = mapped_column(Integer, index=True)
+    decision_type: Mapped[str] = mapped_column(String(32), index=True)
+    action: Mapped[str | None] = mapped_column(String(32))
+    summary: Mapped[str | None] = mapped_column(Text)
+    payload_json: Mapped[str | None] = mapped_column(Text)
+    create_time: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ResearchEvidenceLedger(Base):
+    __tablename__ = "research_evidence_ledger"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    research_id: Mapped[str] = mapped_column(String(32), index=True)
+    round_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    work_item_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    source_url: Mapped[str | None] = mapped_column(String(1024))
+    source_title: Mapped[str | None] = mapped_column(String(512))
+    source_type: Mapped[str] = mapped_column(String(32), index=True)
+    strength_score: Mapped[str | None] = mapped_column(String(32))
+    section_hint: Mapped[str | None] = mapped_column(String(256))
+    snippet: Mapped[str | None] = mapped_column(Text)
+    create_time: Mapped[datetime | None] = mapped_column(DateTime)

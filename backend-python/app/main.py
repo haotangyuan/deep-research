@@ -11,13 +11,14 @@ from .api import model, research, user
 from app.infrastructure.cache import close_cache, init_cache
 from app.core.common import AppError, failure_response
 from app.core.config import get_settings
-from app.infrastructure.db import close_db
+from app.infrastructure.db import close_db, ensure_tables
 from app.infrastructure.observability import init_observability, shutdown_observability
 from app.application.pipeline import research_task_queue
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await ensure_tables()
     init_cache()
     init_observability()
     await research_task_queue.start()

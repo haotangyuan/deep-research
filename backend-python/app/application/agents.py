@@ -10,7 +10,18 @@ from dataclasses import dataclass
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.core.constants import EventType, WorkflowStatus
+from app.core.constants import EventType, WorkflowMode, WorkflowStatus
+from app.application.interventions import (
+    InterventionRecord,
+    InterventionRequestData,
+    build_intervention_apply_summary,
+    build_intervention_applied_message,
+    build_intervention_prompt_block,
+    build_intervention_round_start_message,
+    load_pending_intervention_record,
+    mark_intervention_applied,
+    normalize_intervention_request,
+)
 from app.infrastructure.db import SessionLocal
 from app.infrastructure.events import event_publisher
 from app.core.json_utils import extract_json, truncate
@@ -27,6 +38,12 @@ from app.application.prompts import (
     SUMMARIZE_WEBPAGE_PROMPT,
     TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT,
 )
+from app.application.ultra_dynamic import (
+    UltraDynamicRoundCoordinator,
+    render_dynamic_decision_markdown,
+    render_dynamic_focus_prompt_block,
+    render_report_quality_markdown,
+)
 from app.domain.runtime import ResearchAgentRequest, ResearchMemory, ResearchMessage, ResearchToolCall, render_messages
 from app.domain.state import DeepResearchState, TavilySearchResult
 from app.infrastructure.tavily import tavily_client
@@ -36,6 +53,7 @@ from app.application.research_team import research_team
 
 
 logger = logging.getLogger(__name__)
+ultra_dynamic_round_coordinator = UltraDynamicRoundCoordinator()
 
 
 def _safe_error_summary(exc: Exception) -> str:
@@ -169,20 +187,28 @@ class SupervisorAgent:
 
     async def run(self, state: DeepResearchState) -> None:
         state.status = WorkflowStatus.IN_RESEARCH
+        await self._activate_intervention_for_round(state)
+        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
+            await ultra_dynamic_round_coordinator.start_round(state)
+        title = "开始规划研究路线..."
+        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
+            title = f"开始规划第 {max(1, state.dynamic_round_no)} 轮研究路线..."
         supervisor_event_id = await event_publisher.publish_event(
             state.research_id,
             EventType.SUPERVISOR,
-            "开始规划研究路线...",
+            title,
             state.research_brief,
         )
         state.current_supervisor_event_id = supervisor_event_id
         tasks = await self._plan_research_tasks(state)
+        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
+            await ultra_dynamic_round_coordinator.persist_planned_tasks(state, tasks)
         research_team.prepare(state.research_id, tasks)
         results = await self._execute_research_tasks(tasks, state)
         if await is_cancelled(state.research_id):
             state.status = WorkflowStatus.CANCELLED
             return
-        await self._summarize_supervisor_results(results, state)
+        await self._summarize_supervisor_results(tasks, results, state)
 
     async def _plan_research_tasks(self, state: DeepResearchState) -> list["ResearchTask"]:
         system_prompt = RESEARCH_TASK_PLANNER_PROMPT.format(
@@ -190,11 +216,36 @@ class SupervisorAgent:
             max_concurrent_research_units=state.budget.max_concurrent_units,
             max_researcher_iterations=state.budget.max_conduct_count,
         )
+        planner_input = state.research_brief or ""
+        if state.dynamic_next_focus:
+            planner_input = (
+                planner_input
+                + "\n\n"
+                + render_dynamic_focus_prompt_block(
+                    state.dynamic_next_focus,
+                    round_no=max(1, state.dynamic_round_no),
+                    remaining_rounds=max(0, state.dynamic_max_rounds - state.dynamic_round_no),
+                )
+            )
+        if state.active_intervention:
+            planner_input = (
+                planner_input
+                + "\n\n"
+                + build_intervention_prompt_block(
+                    InterventionRequestData(
+                        focus_sections=list(state.active_intervention.get("focusSections") or []),
+                        reinforce_modes=list(state.active_intervention.get("reinforceModes") or []),
+                        note=state.active_intervention.get("note"),
+                    ),
+                    round_no=max(1, state.dynamic_round_no),
+                    remaining_rounds=max(0, state.dynamic_max_rounds - state.dynamic_round_no),
+                )
+            )
         response = await model_handler.get_chat_client(state.research_id).run_agent(
             ResearchAgentRequest.text_only(
                 "SupervisorAgent",
                 None,
-                [ResearchMessage.system(system_prompt), ResearchMessage.user(state.research_brief or "")],
+                [ResearchMessage.system(system_prompt), ResearchMessage.user(planner_input)],
                 state.trace_context(),
             ),
         )
@@ -208,6 +259,33 @@ class SupervisorAgent:
             formatted,
             state.current_supervisor_event_id,
         )
+        if state.active_intervention and state.active_intervention.get("id"):
+            summary = build_intervention_apply_summary(
+                InterventionRecord(
+                    id=int(state.active_intervention["id"]),
+                    research_id=state.research_id,
+                    user_id=state.trace_metadata_model.user_id,
+                    focus_sections=list(state.active_intervention.get("focusSections") or []),
+                    reinforce_modes=list(state.active_intervention.get("reinforceModes") or []),
+                    note=state.active_intervention.get("note"),
+                ),
+                round_no=max(1, state.dynamic_round_no),
+                remaining_rounds=max(0, state.dynamic_max_rounds - state.dynamic_round_no),
+            )
+            await mark_intervention_applied(int(state.active_intervention["id"]), max(1, state.dynamic_round_no), summary)
+            await event_publisher.publish_event(
+                state.research_id,
+                EventType.INTERVENTION,
+                f"第 {max(1, state.dynamic_round_no)} 轮已采纳用户调整",
+                json.dumps(summary, ensure_ascii=False),
+                state.current_supervisor_event_id,
+            )
+            await event_publisher.publish_message(
+                state.research_id,
+                "assistant",
+                build_intervention_applied_message(summary),
+            )
+            state.active_intervention = None
         state.supervisor_notes.append("## 研究任务拆解\n\n" + formatted)
         return tasks
 
@@ -252,6 +330,43 @@ class SupervisorAgent:
                 "researcher-1",
             ),
         ]
+
+    async def _activate_intervention_for_round(self, state: DeepResearchState) -> None:
+        state.active_intervention = None
+        if state.workflow_mode != WorkflowMode.ULTRA_DYNAMIC:
+            return
+        pending = await load_pending_intervention_record(state.research_id)
+        if pending is None:
+            return
+        payload = normalize_intervention_request(
+            InterventionRequestData(
+                focus_sections=pending.focus_sections,
+                reinforce_modes=pending.reinforce_modes,
+                note=pending.note,
+            ),
+        )
+        state.active_intervention = {
+            "id": pending.id,
+            "focusSections": payload.focus_sections,
+            "reinforceModes": payload.reinforce_modes,
+            "note": payload.note,
+        }
+        await event_publisher.publish_event(
+            state.research_id,
+            EventType.INTERVENTION,
+            f"第 {max(1, state.dynamic_round_no)} 轮准备应用用户调整",
+            build_intervention_prompt_block(
+                payload,
+                round_no=max(1, state.dynamic_round_no),
+                remaining_rounds=max(0, state.dynamic_max_rounds - state.dynamic_round_no),
+            ),
+            state.current_supervisor_event_id,
+        )
+        await event_publisher.publish_message(
+            state.research_id,
+            "assistant",
+            build_intervention_round_start_message(payload, max(1, state.dynamic_round_no)),
+        )
 
     async def _execute_research_tasks(self, tasks: list["ResearchTask"], state: DeepResearchState) -> list["ResearchResult"]:
         return await research_team.execute(
@@ -312,7 +427,12 @@ class SupervisorAgent:
         )
         return ResearchResult(task.index, task.title, task.research_topic, findings, None)
 
-    async def _summarize_supervisor_results(self, results: list["ResearchResult"], state: DeepResearchState) -> None:
+    async def _summarize_supervisor_results(
+        self,
+        tasks: list["ResearchTask"],
+        results: list["ResearchResult"],
+        state: DeepResearchState,
+    ) -> None:
         for result in results:
             state.merge_token_usage_from(result.branch_state)
             state.supervisor_notes.append(self._format_research_result(result))
@@ -324,6 +444,9 @@ class SupervisorAgent:
             f"共完成 {len(results)} 个研究任务，准备生成最终报告",
             state.current_supervisor_event_id,
         )
+        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
+            decision = await ultra_dynamic_round_coordinator.finalize_round(state, tasks, results)
+            state.supervisor_notes.append("## 动态决策复盘\n\n" + render_dynamic_decision_markdown(decision))
 
     def _reserve_conduct_slot(self, state: DeepResearchState) -> bool:
         if state.conduct_count >= state.budget.max_conduct_count:
@@ -691,6 +814,7 @@ class ReportAgent:
             research_brief=state.research_brief or "",
             date=today_str(),
             findings=self._bounded_findings(state.supervisor_notes),
+            quality_context=self._quality_context_text(state.report_quality_context),
         )
         try:
             response = await model_handler.get_chat_client(state.research_id).run_agent(
@@ -733,6 +857,7 @@ class ReportAgent:
 
     def _fallback_report(self, state: DeepResearchState, exc: Exception) -> str:
         findings = self._bounded_findings(state.supervisor_notes)
+        quality_context = self._quality_context_text(state.report_quality_context)
         return (
             "# 研究报告（降级生成）\n\n"
             "## 生成说明\n\n"
@@ -742,11 +867,19 @@ class ReportAgent:
             f"{state.research_brief or '未记录研究方向。'}\n\n"
             "## 已收集研究材料\n\n"
             f"{findings or '未收集到可用研究材料。'}\n\n"
+            "## 报告前验证\n\n"
+            f"{quality_context}\n\n"
             "## 后续建议\n\n"
             "- 优先复核标记为失败或降级的研究分支。\n"
             "- 对营养数值、单位换算和来源引用类结论进行人工校验。\n"
             "- 如需更完整成稿，可在模型服务稳定后基于以上材料重新生成正式报告。\n"
         )
+
+    @staticmethod
+    def _quality_context_text(context: dict | None) -> str:
+        if not context:
+            return "未提供额外的质量上下文。"
+        return render_report_quality_markdown(context)
 
 
 async def is_cancelled(research_id: str) -> bool:

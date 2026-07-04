@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import uuid
 
 from sqlalchemy import and_, desc, or_, select, text
@@ -9,13 +10,29 @@ from app.core.auth import generate_token
 from app.infrastructure.cache import get_cache
 from app.core.common import ModelError, ResearchError, UserError
 from app.core.config import get_settings
-from app.core.constants import EventType, WorkflowStatus
+from app.core.constants import EventType, WorkflowMode, WorkflowStatus
 from app.infrastructure.db import SessionLocal
 from app.infrastructure.events import event_publisher
+from app.application.interventions import (
+    ACTIVE_INTERVENTION_STATUSES,
+    InterventionRecord,
+    InterventionRequestData,
+    InterventionStatus,
+    build_intervention_ack_message,
+    build_intervention_user_message,
+    create_or_replace_pending_intervention,
+    is_ultra_dynamic_budget,
+    list_recent_intervention_records,
+    load_pending_intervention_record,
+    normalize_intervention_request,
+    workflow_mode_for_budget,
+)
 from app.domain.dto import (
     AddModelReq,
     ConfirmDirectionReq,
+    CreateInterventionReq,
     CreateResearchResp,
+    InterventionResp,
     LoginReq,
     LoginResp,
     ModelResp,
@@ -200,22 +217,22 @@ class ResearchService:
     async def get_research_status(self, user_id: int, research_id: str) -> ResearchStatusResp:
         if not await get_cache().verify_research_ownership(research_id, user_id):
             raise ResearchError("研究任务不存在或无权限访问")
-        async with SessionLocal() as session:
-            session_obj = await session.get(ResearchSession, research_id)
-            if session_obj is None:
-                raise ResearchError("研究任务不存在")
-            return self._status_resp(session_obj)
+        session_obj = await self._load_research_session(research_id)
+        if session_obj is None:
+            raise ResearchError("研究任务不存在")
+        return self._status_resp(session_obj)
 
     async def get_research_messages(self, user_id: int, research_id: str) -> ResearchMessageResp:
         if not await get_cache().verify_research_ownership(research_id, user_id):
             raise ResearchError("研究任务不存在或无权限访问")
-        async with SessionLocal() as session:
-            session_obj = await session.get(ResearchSession, research_id)
-            if session_obj is None:
-                raise ResearchError("研究任务不存在")
+        session_obj = await self._load_research_session(research_id)
+        if session_obj is None:
+            raise ResearchError("研究任务不存在")
         timeline = await get_cache().get_timeline(research_id, 0)
         messages = [item.message for item in timeline if item.kind == "message" and item.message is not None]
         events = [item.event for item in timeline if item.kind == "event" and item.event is not None]
+        pending_intervention = await load_pending_intervention_record(research_id)
+        recent_interventions = await list_recent_intervention_records(research_id)
         return ResearchMessageResp(
             id=session_obj.id,
             status=session_obj.status,
@@ -224,12 +241,73 @@ class ResearchService:
             budget=session_obj.budget,
             messages=messages,
             events=events,
+            pending_intervention=self._to_intervention_resp(pending_intervention) if pending_intervention else None,
+            recent_interventions=[self._to_intervention_resp(item) for item in recent_interventions],
             start_time=session_obj.start_time,
             update_time=session_obj.update_time,
             complete_time=session_obj.complete_time,
             total_input_tokens=session_obj.total_input_tokens,
             total_output_tokens=session_obj.total_output_tokens,
         )
+
+    async def create_intervention(
+        self,
+        user_id: int,
+        research_id: str,
+        req: CreateInterventionReq,
+    ) -> InterventionResp:
+        research = await self._load_owned_research_session(user_id, research_id)
+        if research is None:
+            raise ResearchError("研究不存在或无权限访问")
+        if not is_ultra_dynamic_budget(research.budget):
+            raise ResearchError("轻干预仅支持 ULTRA 动态工作流")
+        if (research.status or "").upper() not in ACTIVE_INTERVENTION_STATUSES:
+            raise ResearchError("当前研究阶段不支持追加下一轮关注点")
+
+        payload = normalize_intervention_request(
+            InterventionRequestData(
+                focus_sections=req.focus_sections,
+                reinforce_modes=[str(item) for item in req.reinforce_modes],
+                note=req.note,
+            ),
+        )
+        if not payload.focus_sections and not payload.reinforce_modes and not payload.note:
+            raise ResearchError("请至少填写一个重点 section、补强方向或备注")
+
+        record = InterventionRecord(
+            research_id=research_id,
+            user_id=user_id,
+            status=InterventionStatus.PENDING,
+            focus_sections=payload.focus_sections,
+            reinforce_modes=payload.reinforce_modes,
+            note=payload.note,
+            replace_mode="latest_wins",
+            requested_round_no=None,
+            target_round_no=None,
+            create_time=now_local(),
+            update_time=now_local(),
+        )
+        created, replaced_pending = await create_or_replace_pending_intervention(record, req.replace_pending)
+
+        user_message = build_intervention_user_message(payload)
+        assistant_message = build_intervention_ack_message(payload, replaced=replaced_pending)
+        await event_publisher.publish_message(research_id, "user", user_message)
+        await event_publisher.publish_message(research_id, "assistant", assistant_message)
+        await event_publisher.publish_event(
+            research_id,
+            EventType.INTERVENTION,
+            "已记录下一轮调整",
+            json.dumps(
+                {
+                    "focusSections": created.focus_sections,
+                    "reinforceModes": created.reinforce_modes,
+                    "note": created.note,
+                    "replaceMode": created.replace_mode,
+                },
+                ensure_ascii=False,
+            ),
+        )
+        return self._to_intervention_resp(created)
 
     async def update_research_title(
         self,
@@ -337,6 +415,8 @@ class ResearchService:
                 max_concurrent_units=budget_level.max_concurrent_units,
             )
             state.budget_name = budget_name
+            state.workflow_mode = workflow_mode_for_budget(budget_name)
+            state.dynamic_max_rounds = get_settings().research_ultra_dynamic_max_rounds if is_ultra_dynamic_budget(budget_name) else 1
             state.hitl_mode = hitl_mode
             if not is_generic_resume:
                 await get_cache().save_message(research_id, "user", resume_text)
@@ -385,6 +465,8 @@ class ResearchService:
             research_id=research_id,
             chat_history=messages,
             status=WorkflowStatus.QUEUE,
+            workflow_mode=workflow_mode_for_budget(budget_name),
+            dynamic_max_rounds=get_settings().research_ultra_dynamic_max_rounds if is_ultra_dynamic_budget(budget_name) else 1,
             trace_metadata_model=TraceMetadataModel(
                 research_id=research_id,
                 user_id=user_id,
@@ -518,6 +600,7 @@ class ResearchService:
                 raise ResearchError("删除失败，研究不存在")
             if session_obj.status in MANAGE_BLOCKED_STATUSES:
                 raise ResearchError("研究正在进行中，请先取消后再删除")
+            await session.execute(text("DELETE FROM research_intervention WHERE research_id = :id"), {"id": research_id})
             await session.execute(text("DELETE FROM workflow_event WHERE research_id = :id"), {"id": research_id})
             await session.execute(text("DELETE FROM chat_message WHERE research_id = :id"), {"id": research_id})
             await session.delete(session_obj)
@@ -539,6 +622,39 @@ class ResearchService:
                 else:
                     messages.append(ResearchMessage.assistant(item.content))
             return messages
+
+    async def _load_research_session(self, research_id: str) -> ResearchSession | None:
+        async with SessionLocal() as session:
+            return await session.get(ResearchSession, research_id)
+
+    async def _load_owned_research_session(self, user_id: int, research_id: str) -> ResearchSession | None:
+        async with SessionLocal() as session:
+            session_obj = await session.get(ResearchSession, research_id)
+            if session_obj is None or int(session_obj.user_id) != int(user_id):
+                return None
+            return session_obj
+
+    @staticmethod
+    def _to_intervention_resp(record: InterventionRecord) -> InterventionResp:
+        return InterventionResp(
+            id=record.id,
+            research_id=record.research_id,
+            user_id=record.user_id,
+            status=record.status,
+            focus_sections=record.focus_sections,
+            reinforce_modes=record.reinforce_modes,
+            note=record.note,
+            requested_round_no=record.requested_round_no,
+            target_round_no=record.target_round_no,
+            applied_round_no=record.applied_round_no,
+            apply_summary=record.apply_summary,
+            reject_code=record.reject_code,
+            reject_reason=record.reject_reason,
+            create_time=record.create_time,
+            update_time=record.update_time,
+            applied_time=record.applied_time,
+            expired_time=record.expired_time,
+        )
 
     async def _cas_update_to_queue(self, research_id: str, user_id: int) -> int:
         async with SessionLocal() as session:

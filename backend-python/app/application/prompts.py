@@ -406,6 +406,84 @@ SUMMARIZE_WEBPAGE_PROMPT = """
 今天是 {date}。不要询问用户当前年份或日期。
 """
 
+ULTRA_DYNAMIC_REVIEW_PROMPT = """
+你是 ULTRA 动态工作流的研究经理，负责判断当前轮次是否还需要继续补强，还是已经可以进入报告。
+
+<Mission>
+阅读当前轮次研究产物与来源结构，输出严格 JSON，不要输出 Markdown。
+</Mission>
+
+<Research Brief>
+{research_brief}
+</Research Brief>
+
+<Round Context>
+- 当前轮次：{round_no}
+- 剩余动态轮次：{remaining_rounds}
+- 本轮目标：{round_goal}
+</Round Context>
+
+<Previous Decision>
+{previous_decision}
+</Previous Decision>
+
+<Round Findings>
+{findings}
+</Round Findings>
+
+<Evidence Ledger>
+{evidence}
+</Evidence Ledger>
+
+<Output Schema>
+{{
+  "strategy": "一句话说明本轮后系统的总体策略",
+  "deltaSummary": "本轮相比上一轮新增了什么，仍缺什么",
+  "qualityScoreboard": {{
+    "coverage": 1,
+    "evidence": 1,
+    "freshness": 1,
+    "sourceDiversity": 1,
+    "consistency": 1
+  }},
+  "sectionScoreboard": [
+    {{
+      "section": "章节名",
+      "status": "strong | needs_more_evidence",
+      "evidenceStatus": "sufficient | partial | weak",
+      "confidence": "high | medium | low",
+      "gaps": ["缺口 1"],
+      "recommendedSourceTypes": ["official", "report"]
+    }}
+  ],
+  "sourceTypeBreakdown": {{
+    "official": 0,
+    "academic": 0,
+    "report": 0,
+    "news": 0,
+    "company": 0,
+    "other": 0
+  }},
+  "nextFocus": {{
+    "sections": ["下一轮重点章节"],
+    "directives": ["下一轮动作"],
+    "requiredSourceTypes": ["official"]
+  }},
+  "nextAction": "continue | report",
+  "blockingGaps": ["阻塞进入报告的缺口"]
+}}
+</Output Schema>
+
+<Rules>
+- 评分范围必须是 1-5 的整数。
+- 如果证据缺口仍明显，`nextAction` 必须是 `continue`。
+- 只有在主要章节已有足够证据支撑时，才能输出 `report`。
+- 不要输出 schema 之外的字段。
+</Rules>
+
+今天是 {date}。不要询问用户当前年份或日期。
+"""
+
 REPORT_AGENT_PROMPT = """
 你是专业的研究报告撰写专员，负责将研究发现整合为高质量、结构清晰的深度研究报告。
 
@@ -420,6 +498,10 @@ REPORT_AGENT_PROMPT = """
 <Research Findings>
 {findings}
 </Research Findings>
+
+<Quality Context>
+{quality_context}
+</Quality Context>
 
 <Language Rule>
 【强制】报告语言必须与用户原始请求的语言一致。
@@ -472,6 +554,7 @@ REPORT_AGENT_PROMPT = """
 - 提供分析和洞察，不只是罗列信息
 - 保持客观中立，多角度呈现（如有争议）
 - 信息密度要高，深度研究报告通常较长
+- 如果 Quality Context 指出弱 section、证据缺口或 gate 未完全通过，必须显式写出不确定性与证据边界，禁止伪装成确定性结论
 
 **格式要求**：
 - 使用 Markdown 格式

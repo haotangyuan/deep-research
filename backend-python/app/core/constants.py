@@ -13,6 +13,11 @@ class WorkflowStatus:
     ARCHIVED = "ARCHIVED"
 
 
+class WorkflowMode:
+    FIXED = "fixed"
+    ULTRA_DYNAMIC = "ultra_dynamic"
+
+
 class EventType:
     QUEUE = "QUEUE"
     SCOPE = "SCOPE"
@@ -23,4 +28,5 @@ class EventType:
     DIRECTION_CONFIRM = "DIRECTION_CONFIRM"
     CLARIFY_FORM = "CLARIFY_FORM"
     AGENT_RUNTIME = "AGENT_RUNTIME"
+    INTERVENTION = "INTERVENTION"
     ERROR = "ERROR"

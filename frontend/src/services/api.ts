@@ -35,6 +35,13 @@ export interface SendMessageResponse {
   content: string;
 }
 
+export interface CreateInterventionRequest {
+  focusSections: string[];
+  reinforceModes: Array<'official' | 'data' | 'comparison' | 'latest'>;
+  note?: string;
+  replacePending?: boolean;
+}
+
 export interface ResearchStatusResponse {
   id: string;
   status: string;
@@ -108,11 +115,39 @@ export interface ResearchMessageResponse {
   budget?: string;
   messages: ChatMessage[];
   events: WorkflowEvent[];
+  pendingIntervention?: ResearchIntervention;
+  recentInterventions?: ResearchIntervention[];
   startTime?: string;
   updateTime?: string;
   completeTime?: string;
   totalInputTokens?: number;
   totalOutputTokens?: number;
+}
+
+export interface ResearchIntervention {
+  id?: number;
+  researchId: string;
+  userId: number;
+  status: string;
+  focusSections: string[];
+  reinforceModes: string[];
+  note?: string;
+  requestedRoundNo?: number;
+  targetRoundNo?: number;
+  appliedRoundNo?: number;
+  applySummary?: {
+    appliedFocusSections?: string[];
+    appliedReinforceModes?: string[];
+    note?: string;
+    appliedRoundNo?: number;
+    remainingRoundsAfterApply?: number;
+  };
+  rejectCode?: string;
+  rejectReason?: string;
+  createTime?: string;
+  updateTime?: string;
+  appliedTime?: string;
+  expiredTime?: string;
 }
 
 export interface ModelInfo {
@@ -268,6 +303,14 @@ export const researchApi = {
     const response = await researchClient.post<Result<SendMessageResponse>>(`/${researchId}/direction-action`, req);
     if (response.data.code !== 0) {
       throw new Error(response.data.message || '方向确认操作失败');
+    }
+    return response.data.data;
+  },
+
+  createIntervention: async (researchId: string, req: CreateInterventionRequest): Promise<ResearchIntervention> => {
+    const response = await researchClient.post<Result<ResearchIntervention>>(`/${researchId}/interventions`, req);
+    if (response.data.code !== 0) {
+      throw new Error(response.data.message || '追加关注点失败');
     }
     return response.data.data;
   },

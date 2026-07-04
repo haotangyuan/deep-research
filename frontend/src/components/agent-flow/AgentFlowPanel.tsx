@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Bot, ChevronLeft, ChevronRight, ExternalLink, GitBranch, Globe2, Info, Loader2, MousePointer2, Wrench } from 'lucide-react';
+import { Bot, ChevronLeft, ChevronRight, ExternalLink, GitBranch, Globe2, Info, Loader2, MousePointer2, Sparkles, Wrench } from 'lucide-react';
 
 import type { ChatMessage, WorkflowEvent } from '../../services/api';
 import { buildAgentFlowModel } from './transform';
@@ -14,6 +14,8 @@ interface AgentFlowPanelProps {
   status?: string;
   events: WorkflowEvent[];
   messages: ChatMessage[];
+  onOpenInterventionModal?: () => void;
+  showInterventionAction?: boolean;
 }
 
 function formatTimestamp(value?: string) {
@@ -46,7 +48,7 @@ function detailLabel(kind?: string) {
   }
 }
 
-export function AgentFlowPanel({ title, status, events, messages }: AgentFlowPanelProps) {
+export function AgentFlowPanel({ title, status, events, messages, onOpenInterventionModal, showInterventionAction = false }: AgentFlowPanelProps) {
   const [open, setOpen] = useState(() => typeof window === 'undefined' || window.innerWidth >= 1024);
   const [expandedNodeIds, setExpandedNodeIds] = useState<string[]>([]);
   const expandedNodeIdSet = useMemo(() => new Set(expandedNodeIds), [expandedNodeIds]);
@@ -196,6 +198,16 @@ export function AgentFlowPanel({ title, status, events, messages }: AgentFlowPan
                 <div className="text-[10px] text-gray-500">HITL</div>
               </div>
             </div>
+            {showInterventionAction && onOpenInterventionModal && (
+              <button
+                type="button"
+                onClick={onOpenInterventionModal}
+                className="mt-4 inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
+              >
+                <Sparkles className="h-4 w-4" />
+                调整下一轮
+              </button>
+            )}
           </div>
 
           <div className="min-h-0 flex-1">

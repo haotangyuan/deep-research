@@ -45,6 +45,16 @@ class DeepResearchState(BaseModel):
     research_id: str
     chat_history: list[ResearchMessage] = Field(default_factory=list)
     status: str
+    workflow_mode: str = "fixed"
+    dynamic_round_no: int = 0
+    dynamic_max_rounds: int = 1
+    active_intervention: dict[str, Any] | None = None
+    current_planning_round_id: int | None = None
+    current_planning_round_goal: str | None = None
+    latest_dynamic_decision: dict[str, Any] | None = None
+    dynamic_round_history: list[dict[str, Any]] = Field(default_factory=list)
+    dynamic_next_focus: dict[str, Any] | None = None
+    report_quality_context: dict[str, Any] | None = None
     trace_metadata_model: TraceMetadataModel
 
     clarify_with_user_schema: dict[str, Any] | None = None
@@ -114,6 +124,16 @@ class DeepResearchState(BaseModel):
             research_id=self.research_id,
             chat_history=self.chat_history,
             status=self.status,
+            workflow_mode=self.workflow_mode,
+            dynamic_round_no=self.dynamic_round_no,
+            dynamic_max_rounds=self.dynamic_max_rounds,
+            active_intervention=self.active_intervention,
+            current_planning_round_id=self.current_planning_round_id,
+            current_planning_round_goal=self.current_planning_round_goal,
+            latest_dynamic_decision=self.latest_dynamic_decision,
+            dynamic_round_history=self.dynamic_round_history,
+            dynamic_next_focus=self.dynamic_next_focus,
+            report_quality_context=self.report_quality_context,
             trace_metadata_model=self.trace_metadata_model,
             research_brief=self.research_brief,
             budget=self.budget,
@@ -137,6 +157,16 @@ class DeepResearchState(BaseModel):
             research_id=self.research_id,
             chat_history=self.chat_history,
             status=self.status,
+            workflow_mode=self.workflow_mode,
+            dynamic_round_no=self.dynamic_round_no,
+            dynamic_max_rounds=self.dynamic_max_rounds,
+            active_intervention=self.active_intervention,
+            current_planning_round_id=self.current_planning_round_id,
+            current_planning_round_goal=self.current_planning_round_goal,
+            latest_dynamic_decision=self.latest_dynamic_decision,
+            dynamic_round_history=self.dynamic_round_history,
+            dynamic_next_focus=self.dynamic_next_focus,
+            report_quality_context=self.report_quality_context,
             trace_metadata_model=self.trace_metadata_model,
             research_brief=self.research_brief,
             budget=self.budget,
