@@ -557,6 +557,9 @@ class ResearcherAgent:
             async with tool_span(tool_call.name, "ResearcherAgent", state):
                 result = await self.search_agent.run(search_state)
         state.merge_token_usage_from(search_state)
+        for url, item in search_state.search_results.items():
+            state.search_results.setdefault(url, item)
+        state.search_notes.extend(search_state.search_notes)
         return result
 
     async def _compress_research(self, memory: ResearchMemory, state: DeepResearchState) -> str:
