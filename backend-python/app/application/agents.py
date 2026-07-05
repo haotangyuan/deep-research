@@ -45,7 +45,7 @@ from app.application.ultra_dynamic import (
     render_report_quality_markdown,
 )
 from app.domain.runtime import ResearchAgentRequest, ResearchMemory, ResearchMessage, ResearchToolCall, render_messages
-from app.domain.state import DeepResearchState, TavilySearchResult
+from app.domain.state import DeepResearchState, ResearcherSource, TavilySearchResult
 from app.infrastructure.tavily import tavily_client
 from app.core.timeutil import today_str
 from app.application.tools import RESEARCHER_STAGE_TOOLS, execute_simple_tool
@@ -563,7 +563,7 @@ class ResearcherAgent:
         return result
 
     async def _compress_research(self, memory: ResearchMemory, state: DeepResearchState) -> str:
-        system_prompt = COMPRESS_RESEARCH_SYSTEM_PROMPT.format(date=today_str())
+        system_prompt = COMPRESS_RESEARCH_SYSTEM_PROMPT.replace("{date}", today_str())
         messages = [ResearchMessage.system(system_prompt)]
         messages.extend(memory.messages()[2:])
         messages.append(
@@ -576,7 +576,7 @@ class ResearcherAgent:
                 ResearchAgentRequest.text_only("ResearchCompressorAgent", None, messages, state.trace_context()),
             )
             state.add_token_usage(response.token_usage)
-            compressed = response.ai_message.text
+            findings, sources = self._parse_compressed_research(response.ai_message.text, state)
         except Exception as exc:
             logger.exception(
                 "research compression failed research_id=%s topic=%s model_id=%s budget=%s",
@@ -592,9 +592,11 @@ class ResearcherAgent:
                 summarize(f"{exc.__class__.__name__}: {exc}"),
                 state.current_research_event_id,
             )
-            compressed = self._fallback_compressed_research(state, exc)
-        state.compressed_research = compressed
-        preview = compressed[: min(200, len(compressed))] + "..."
+            findings = self._fallback_compressed_research(state, exc)
+            sources = self._fallback_researcher_sources(state)
+        state.compressed_research = findings
+        state.researcher_sources = sources
+        preview = findings[: min(200, len(findings))] + "..."
         await event_publisher.publish_event(
             state.research_id,
             EventType.RESEARCH,
@@ -602,7 +604,58 @@ class ResearcherAgent:
             preview,
             state.current_research_event_id,
         )
-        return compressed
+        return findings
+
+    def _parse_compressed_research(self, text: str, state: DeepResearchState) -> tuple[str, list[ResearcherSource]]:
+        """解析 Researcher 结构化 JSON 输出，返回 (findings, sources)。解析失败时 fallback。"""
+        data = extract_json(text)
+        if not isinstance(data, dict):
+            return text, self._fallback_researcher_sources(state)
+        findings = str(data.get("findings") or text)
+        raw_sources = data.get("sources") or []
+        sources: list[ResearcherSource] = []
+        seen_urls: set[str] = set()
+        for item in raw_sources if isinstance(raw_sources, list) else []:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            sources.append(
+                ResearcherSource(
+                    url=url,
+                    title=item.get("title"),
+                    type=str(item.get("type") or "other"),
+                    strength=str(item.get("strength") or "medium"),
+                    snippet=item.get("snippet"),
+                    section_hint=item.get("sectionHint") or item.get("section_hint"),
+                )
+            )
+        return findings, sources
+
+    def _fallback_researcher_sources(self, state: DeepResearchState) -> list[ResearcherSource]:
+        """降级：从 branch_state.search_results 提取结构化来源（URL 启发式分类）。"""
+        from app.application.ultra_dynamic import classify_source_type
+
+        sources: list[ResearcherSource] = []
+        seen: set[str] = set()
+        for item in state.search_results.values():
+            url = (item.url or "").strip()
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            sources.append(
+                ResearcherSource(
+                    url=url,
+                    title=item.title,
+                    type=classify_source_type(url),
+                    strength="medium",
+                    snippet=truncate(item.content or item.raw_content or "", 200) or None,
+                    section_hint=state.research_topic,
+                )
+            )
+        return sources
 
     @staticmethod
     def _fallback_compressed_research(state: DeepResearchState, exc: Exception) -> str:

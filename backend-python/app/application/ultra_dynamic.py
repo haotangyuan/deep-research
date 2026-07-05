@@ -103,10 +103,33 @@ def collect_evidence_entries(
         branch_state = result.branch_state
         if branch_state is None:
             continue
+        seen_urls: set[str] = set()
+        # 优先用 Researcher 结构化来源（LLM 判定 type/strength，借鉴点 B）
+        for src in branch_state.researcher_sources:
+            url = (src.url or "").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            entries.append(
+                EvidenceLedgerEntry(
+                    research_id=research_id,
+                    round_no=round_no,
+                    task_index=result.index,
+                    task_title=result.title,
+                    source_url=url,
+                    source_title=src.title,
+                    source_type=src.type or classify_source_type(url),
+                    strength_score=src.strength,
+                    section_hint=src.section_hint or result.title,
+                    snippet=truncate(src.snippet or "", 500) or None,
+                ),
+            )
+        # fallback：search_results 里未被 researcher_sources 覆盖的 URL（URL 启发式分类）
         for item in branch_state.search_results.values():
             url = (item.url or "").strip()
-            if not url:
+            if not url or url in seen_urls:
                 continue
+            seen_urls.add(url)
             entries.append(
                 EvidenceLedgerEntry(
                     research_id=research_id,

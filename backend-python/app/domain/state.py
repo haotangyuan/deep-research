@@ -39,6 +39,16 @@ class TavilySearchResult(BaseModel):
     score: float | None = None
 
 
+class ResearcherSource(BaseModel):
+    """Researcher 结构化输出的来源条目（借鉴 CC StructuredOutput 思想）。"""
+    url: str
+    title: str | None = None
+    type: str = "other"  # official|academic|report|news|company|other
+    strength: str = "medium"  # high|medium|low
+    snippet: str | None = None
+    section_hint: str | None = None
+
+
 class DeepResearchState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -73,6 +83,7 @@ class DeepResearchState(BaseModel):
     search_count: int = 0
     researcher_notes: list[str] = Field(default_factory=list)
     compressed_research: str | None = None
+    researcher_sources: list[ResearcherSource] = Field(default_factory=list)
 
     query: str | None = None
     max_results: int | None = None
@@ -146,6 +157,7 @@ class DeepResearchState(BaseModel):
             researcher_notes=[],
             search_results={},
             search_notes=[],
+            researcher_sources=[],
             total_input_tokens=0,
             total_output_tokens=0,
             agent_worker_id=worker_id,
@@ -179,6 +191,7 @@ class DeepResearchState(BaseModel):
             topic=topic,
             search_results={},
             search_notes=[],
+            researcher_sources=[],
             total_input_tokens=0,
             total_output_tokens=0,
             agent_worker_id=self.agent_worker_id,

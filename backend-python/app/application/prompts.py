@@ -305,34 +305,41 @@ COMPRESS_RESEARCH_SYSTEM_PROMPT = """
 </Processing Rules>
 
 <Output Format>
-## 搜索查询记录
+输出严格 JSON，不要输出 Markdown 代码块标记或任何额外文字。schema：
 
-| 序号 | 搜索词 | 结果数 |
-|-----|-------|-------|
-| 1 | ... | ... |
+{
+  "findings": "整理后的研究发现（Markdown 文本，保留所有事实/数据/引用，使用 [1][2] 行内引用标记来源）",
+  "sources": [
+    {
+      "url": "来源 URL",
+      "title": "来源标题",
+      "type": "official|academic|report|news|company|other",
+      "strength": "high|medium|low",
+      "snippet": "该来源的关键片段（≤200字）",
+      "sectionHint": "该来源适用的研究章节"
+    }
+  ]
+}
 
-## 研究发现
+来源类型 type 判定：
+- official：政府/官方机构（.gov、官方统计、监管部门）
+- academic：学术（.edu、arxiv、nature、sciencedirect、论文）
+- report：行业报告（咨询公司、白皮书、PDF 报告）
+- news：新闻媒体（reuters、bloomberg、新华社等）
+- company：公司官网/商业页面
+- other：其他
 
-### {{主题/方面 1}}
-
-{{详细内容，包含具体事实、数据、引用}}[1][2]
-
-### {{主题/方面 2}}
-
-{{详细内容}}[3]
-
-## 来源列表
-
-[1] {{来源标题}}: {{URL}}
-[2] {{来源标题}}: {{URL}}
+来源强度 strength 判定：
+- high：官方数据、权威学术、一手来源
+- medium：权威媒体、行业报告
+- low：博客、自媒体、未署名
 </Output Format>
 
 <Citation Rules>
 1. 为每个唯一 URL 分配连续编号 [1], [2], [3]...
-2. 在正文中使用行内引用标记信息来源
-3. 在文末"来源列表"中列出所有引用的 URL
-4. 格式：[n] 来源标题: URL
-5. 【重要】不得丢失任何来源——下游报告生成依赖完整的引用
+2. findings 文本中使用行内引用 [n] 标记信息来源
+3. sources 数组列出全部引用的 URL，顺序尽量与编号对应
+4. 【重要】不得丢失任何来源——下游报告生成与证据账本依赖完整的 sources
 </Citation Rules>
 
 今天是 {date}。不要询问用户当前年份或日期。
@@ -343,17 +350,17 @@ COMPRESS_RESEARCH_HUMAN_MESSAGE = """
 
 RESEARCH TOPIC: {research_topic}
 
-你的任务是在保留全部与该研究问题相关信息的前提下，对这些研究发现进行整理。
+你的任务是在保留全部与该研究问题相关信息的前提下，对这些研究发现进行整理，并输出 JSON。
 
 关键要求：
 - 不要总结或改写信息——必须逐字保留。
 - 不要丢失任何细节、事实、姓名、数字或具体发现。
 - 不要过滤掉与研究主题相关的任何信息。
-- 在整理结构时保持条理，但务必保留全部内容。
-- 包含研究过程中找到的全部来源和引用。
+- findings 中保持条理，务必保留全部内容。
+- sources 必须包含研究过程中找到的全部来源 URL，并按 type/strength 分类。
 - 记住，这些研究是为回答上述特定问题而进行的。
 
-整理后的信息将用于生成最终报告，因此全面性至关重要。
+整理后的信息将用于生成最终报告，因此全面性至关重要。只输出 JSON，不要有任何额外文字。
 """
 
 SUMMARIZE_WEBPAGE_PROMPT = """
