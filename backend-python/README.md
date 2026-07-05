@@ -58,13 +58,19 @@ TAVILY_API_KEY=
 
 默认数据库名为 `db_deep_research`。后端启动时会自动创建缺失的数据表，但不会自动创建数据库本身。
 
-首次启动前，先执行：
+首次启动前，先手动建库：
 
 ```bash
-mysql -u root -p < backend-python/sql/create_db_deep_research.sql
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS db_deep_research CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
 ```
 
-如果你使用的不是 `root`，或者 `DB_URL` 改成了别的库名，需要同步调整 SQL 中的数据库名或执行账号。
+如需重置或导入完整 schema，可使用仓库根目录的 dump 文件：
+
+```bash
+mysql -u root -p db_deep_research < db_deep_research.sql
+```
+
+如果你使用的不是 `root`，或者 `DB_URL` 改成了别的库名，需要同步调整执行账号与库名。
 
 ## 启动
 

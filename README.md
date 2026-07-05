@@ -26,8 +26,14 @@ deep-research-main/
 │   │   └── infrastructure/  # DB、Redis、LLM、搜索与可观测性
 │   └── tests/
 ├── frontend/                # React 前端
-├── docs/                    # Python 当前实现文档
-└── openspec/                # OpenSpec 配置
+├── notebook/                # 项目文档与开发笔记
+│   ├── architecture/        # 架构设计
+│   ├── contract/            # API 与数据契约
+│   ├── features/            # 功能设计（HITL、ULTRA 动态工作流）
+│   ├── operations/          # 性能与可观测性
+│   └── dev/                 # 开发日志
+├── docs/                    # superpower 文档
+└── db_deep_research.sql     # 数据库 schema
 ```
 
 ## 工作流
@@ -69,11 +75,11 @@ AgentScope 已不再只是底层 Agent 调用适配器，而是项目的 **Agent
 
 项目描述：构建基于多 Agent 协作的自动化深度研究平台，覆盖需求澄清、任务规划、并行检索、网页摘要、报告生成、人工确认、断点恢复与实时链路展示。
 
-- **动态多轮研究工作流**：设计 `AgentPipeline + AgentScope Runtime` 分层架构，在 `ULTRA` 档位引入 Supervisor 驱动的动态规划闭环；系统基于质量评分、section 完整度和来源结构决定继续补强或生成报告，并支持用户对下一轮研究重点进行轻量干预。
-- **AgentScope 原生运行时与团队任务**：基于长生命周期 `Agent + ReActConfig`、`Toolkit/ToolBase`、隔离 `AgentState`、`ContextConfig` 和 Middleware 构建执行层，并用 `AgentState.tasks_context/Task` 对接项目 Team 协调器，以稳定 Worker/Task ID、预算并发、失败隔离和版本化 snapshot 支撑复杂研究任务。
-- **HITL 与可靠状态恢复**：实现研究方向 APPROVE/REVISE、失败续跑和取消清理；将业务 checkpoint、AgentScope 任务状态及有界 runtime snapshot 保存至 Redis，并通过数据库 CAS 限制合法状态迁移，避免重复执行和并发误操作。
-- **可解释进度与用户可干预研究过程**：设计 MySQL + Redis ZSet 双写时间线和 `Last-Event-ID` 断线重放；通过 Event Bridge 将动态决策、任务批次、干预事件和采纳结果映射为兼容事件，前端分层展示研究进度、决策依据与下一轮调整回显。
-- **性能治理与全链路可观测性**：实现预算限流、搜索/摘要缓存、in-flight 合并、网页 AgentState 隔离、超时降级和报告输入上限；以 OpenTelemetry 贯通 `workflow → stage → AgentScope agent → model/tool` 并通过 OTLP 导出 Langfuse，支持 Token、延迟、异常和调用上下文追踪。
+- **分层架构设计**：采用「业务状态机 + Agent 运行时」分层架构——外层 `AgentPipeline` 基于 MySQL/Redis 维护 QUEUE、SCOPE、HITL、IN_RESEARCH、IN_REPORT、COMPLETED 等可恢复的业务状态机，内层 AgentScope 2.0.3 负责 Agent 生命周期、隔离 `AgentState`、原生 `TaskContext`、Leader/Worker 团队、Toolkit、Middleware 与 tracing；该边界把数据库事务、前端协议与框架内部解耦，让框架承担认知执行，业务层掌控持久化与一致性。
+- **ULTRA 动态工作流档位**：在 ULTRA 预算下设计 Supervisor 驱动的多轮规划闭环（最多 5 轮），每轮由 LLM 作为研究经理输出 5 维质量评分（coverage/evidence/freshness/sourceDiversity/consistency）+ section 评分板 + 来源类型分布，据此决策「继续补强」或「生成报告」；引入证据账本（`research_evidence_ledger`）对来源自动分类（official/academic/report/news/company），并支持用户对下一轮重点章节与强化模式进行轻量干预，在预算或轮次耗尽时优雅终止并标注证据缺口。
+- **HITL 与可靠状态恢复**：实现研究方向 APPROVE/REVISE 确认（范围分析后暂停等待用户反馈）、失败续跑与取消清理；将业务 checkpoint、AgentScope 任务状态及有界 runtime snapshot 保存至 Redis，通过数据库 CAS 限制合法状态迁移，避免重复执行与并发误操作，断点恢复时优先复用 checkpoint 跳过已完成阶段。
+- **可解释进度与用户可干预研究过程**：设计 MySQL + Redis ZSet 双写时间线和 `Last-Event-ID` 断线重放，保证 SSE 断线后无损恢复；通过 Event Bridge 将动态决策、任务批次、干预事件和采纳结果映射为兼容事件，前端分层展示研究进度、决策依据与下一轮调整回显，使多轮研究过程对用户全程透明可干预。
+- **性能治理与全链路可观测性**：实现预算限流、搜索/摘要 TTL 缓存、in-flight 合并、网页 AgentState 隔离、超时降级与报告输入上限，保障高并发下的稳定性与成本可控；以 OpenTelemetry 贯通 `workflow → stage → AgentScope agent → model/tool` 全链路，通过 OTLP 导出 Langfuse，支持 Token、延迟、异常和调用上下文追踪，线上排障可按需开启脱敏后的 IO 采集。
 
 ## 快速开始
 
@@ -119,8 +125,8 @@ npm run build
 ## 文档
 
 - [后端开发与配置](backend-python/README.md)
-- [架构设计](docs/架构设计.md)
-- [API 与数据契约](docs/API与数据契约.md)
-- [性能与可观测性](docs/性能与可观测性.md)
-- [ULTRA 动态工作流与轻干预](docs/ULTRA动态工作流与轻干预.md)
-- [HITL 方向确认](docs/hitl.md)
+- [架构设计](notebook/architecture/架构设计.md)
+- [API 与数据契约](notebook/contract/API与数据契约.md)
+- [性能与可观测性](notebook/operations/性能与可观测性.md)
+- [ULTRA 动态工作流与轻干预](notebook/features/ULTRA动态工作流与轻干预.md)
+- [HITL 方向确认](notebook/features/hitl.md)
