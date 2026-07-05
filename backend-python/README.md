@@ -54,6 +54,18 @@ TAVILY_API_KEY=
 
 模型由数据库 `model` 表管理，后端不硬编码研究模型。
 
+## 数据库初始化
+
+默认数据库名为 `db_deep_research`。后端启动时会自动创建缺失的数据表，但不会自动创建数据库本身。
+
+首次启动前，先执行：
+
+```bash
+mysql -u root -p < backend-python/sql/create_db_deep_research.sql
+```
+
+如果你使用的不是 `root`，或者 `DB_URL` 改成了别的库名，需要同步调整 SQL 中的数据库名或执行账号。
+
 ## 启动
 
 ```bash
