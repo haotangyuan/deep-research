@@ -38,6 +38,9 @@ from app.application.prompts import (
     SUMMARIZE_WEBPAGE_PROMPT,
     TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT,
     ULTRA_CLAIM_VERIFY_PROMPT,
+    REPORT_DRAFT_ANGLE_PROMPT,
+    REPORT_JUDGE_PROMPT,
+    REPORT_SYNTHESIS_PROMPT,
 )
 from app.application.ultra_dynamic import (
     UltraDynamicRoundCoordinator,
@@ -858,6 +861,14 @@ class SearchAgent:
         return "".join(output)
 
 
+# 报告多角度起草的角度定义（借鉴 CC judge panel 思想）
+REPORT_DRAFT_ANGLES = [
+    {"key": "data-driven", "desc": "数据驱动", "focus": "突出数值、对比表格、来源引用，用数据支撑每个论点。"},
+    {"key": "narrative", "desc": "叙事驱动", "focus": "突出趋势、因果与演进，讲清来龙去脉。"},
+    {"key": "comparative", "desc": "对比驱动", "focus": "突出多维度横向对比，用对比表格/矩阵呈现。"},
+]
+
+
 class ReportAgent:
     async def run(self, state: DeepResearchState) -> str:
         state.status = WorkflowStatus.IN_REPORT
@@ -867,39 +878,60 @@ class ReportAgent:
             "正在生成研究报告...",
             None,
         )
-        prompt = REPORT_AGENT_PROMPT.format(
-            research_brief=state.research_brief or "",
-            date=today_str(),
-            findings=self._bounded_findings(state.supervisor_notes),
-            quality_context=self._quality_context_text(state.report_quality_context),
-        )
-        try:
-            response = await model_handler.get_chat_client(state.research_id).run_agent(
-                ResearchAgentRequest.text_only(
-                    "ReportAgent",
-                    "",
-                    [ResearchMessage.user(prompt)],
-                    state.trace_context(),
-                ),
+        # ULTRA 动态工作流走多角度起草 + 评委 + 融合（借鉴点 C）；其他模式单次生成
+        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
+            try:
+                state.report = await self._draft_judge_synthesize(state)
+                complete_title = "研究报告已完成"
+            except Exception as exc:
+                logger.exception(
+                    "multi-angle report failed research_id=%s model_id=%s budget=%s",
+                    state.research_id,
+                    state.trace_metadata_model.model_id,
+                    state.budget_name,
+                )
+                await event_publisher.publish_event(
+                    state.research_id,
+                    EventType.ERROR,
+                    "多角度报告生成失败，使用兜底报告",
+                    summarize(f"{exc.__class__.__name__}: {exc}"),
+                )
+                state.report = self._fallback_report(state, exc)
+                complete_title = "研究报告已完成（降级）"
+        else:
+            prompt = REPORT_AGENT_PROMPT.format(
+                research_brief=state.research_brief or "",
+                date=today_str(),
+                findings=self._bounded_findings(state.supervisor_notes),
+                quality_context=self._quality_context_text(state.report_quality_context),
             )
-            state.add_token_usage(response.token_usage)
-            state.report = response.ai_message.text
-            complete_title = "研究报告已完成"
-        except Exception as exc:
-            logger.exception(
-                "report generation failed research_id=%s model_id=%s budget=%s",
-                state.research_id,
-                state.trace_metadata_model.model_id,
-                state.budget_name,
-            )
-            await event_publisher.publish_event(
-                state.research_id,
-                EventType.ERROR,
-                "报告生成模型失败，使用兜底报告",
-                summarize(f"{exc.__class__.__name__}: {exc}"),
-            )
-            state.report = self._fallback_report(state, exc)
-            complete_title = "研究报告已完成（降级）"
+            try:
+                response = await model_handler.get_chat_client(state.research_id).run_agent(
+                    ResearchAgentRequest.text_only(
+                        "ReportAgent",
+                        "",
+                        [ResearchMessage.user(prompt)],
+                        state.trace_context(),
+                    ),
+                )
+                state.add_token_usage(response.token_usage)
+                state.report = response.ai_message.text
+                complete_title = "研究报告已完成"
+            except Exception as exc:
+                logger.exception(
+                    "report generation failed research_id=%s model_id=%s budget=%s",
+                    state.research_id,
+                    state.trace_metadata_model.model_id,
+                    state.budget_name,
+                )
+                await event_publisher.publish_event(
+                    state.research_id,
+                    EventType.ERROR,
+                    "报告生成模型失败，使用兜底报告",
+                    summarize(f"{exc.__class__.__name__}: {exc}"),
+                )
+                state.report = self._fallback_report(state, exc)
+                complete_title = "研究报告已完成（降级）"
         # 声明交叉验证（借鉴点 A2，仅 ULTRA 动态工作流）
         if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
             try:
@@ -913,6 +945,155 @@ class ReportAgent:
         await event_publisher.publish_event(state.research_id, EventType.REPORT, complete_title, None)
         await event_publisher.publish_message(state.research_id, "assistant", state.report)
         return state.report
+
+    async def _draft_judge_synthesize(self, state: DeepResearchState) -> str:
+        """多角度起草 + 评委打分 + 融合（借鉴 CC judge panel）。"""
+        findings = self._bounded_findings(state.supervisor_notes)
+        quality_context = self._quality_context_text(state.report_quality_context)
+
+        # 阶段1：3 角度并行起草
+        drafts = await asyncio.gather(
+            *(self._draft_by_angle(state, angle, findings, quality_context) for angle in REPORT_DRAFT_ANGLES)
+        )
+        valid = [(a, d) for a, d in zip(REPORT_DRAFT_ANGLES, drafts) if d]
+        if not valid:
+            raise RuntimeError("all draft angles failed")
+        if len(valid) == 1:
+            return valid[0][1]
+
+        # 阶段2：评委并行打分
+        judged = await asyncio.gather(*(self._judge_draft(state, draft) for _, draft in valid))
+        scored = list(zip(valid, judged))
+
+        def _total(j: dict) -> float:
+            s = j.get("scores", {}) if isinstance(j, dict) else {}
+            return sum(v for v in s.values() if isinstance(v, (int, float)))
+
+        scored.sort(key=lambda x: _total(x[1]), reverse=True)
+        (_, champion_draft), champion_judge = scored[0]
+        champion_score = _total(champion_judge)
+        runner_ups = scored[1:]
+
+        # 阶段3：融合（冠军为底 + 嫁接落选亮点）
+        return await self._synthesize_report(state, champion_draft, champion_score, runner_ups)
+
+    async def _draft_by_angle(
+        self,
+        state: DeepResearchState,
+        angle: dict,
+        findings: str,
+        quality_context: str,
+    ) -> str | None:
+        prompt = REPORT_DRAFT_ANGLE_PROMPT.format(
+            date=today_str(),
+            angle_desc=angle["desc"],
+            angle_focus=angle["focus"],
+            research_brief=state.research_brief or "",
+            findings=findings,
+            quality_context=quality_context,
+        )
+        await event_publisher.publish_event(
+            state.research_id,
+            EventType.AGENT_RUNTIME,
+            f"报告起草: {angle['desc']}",
+            json.dumps({"kind": "report_draft", "angle": angle["key"], "angleDesc": angle["desc"]}, ensure_ascii=False),
+        )
+        try:
+            response = await model_handler.get_chat_client(state.research_id).run_agent(
+                ResearchAgentRequest.text_only(
+                    "ReportAgent:" + angle["key"],
+                    "",
+                    [ResearchMessage.user(prompt)],
+                    state.trace_context(),
+                ),
+            )
+            state.add_token_usage(response.token_usage)
+            return response.ai_message.text
+        except Exception:
+            logger.exception("report draft failed angle=%s", angle["key"])
+            return None
+
+    async def _judge_draft(self, state: DeepResearchState, draft: str) -> dict:
+        prompt = REPORT_JUDGE_PROMPT.format(
+            research_brief=state.research_brief or "",
+            draft=draft,
+        )
+        try:
+            response = await model_handler.get_chat_client(state.research_id).run_agent(
+                ResearchAgentRequest.text_only(
+                    "ReportJudge",
+                    "",
+                    [ResearchMessage.user(prompt)],
+                    state.trace_context(),
+                ),
+            )
+            state.add_token_usage(response.token_usage)
+            verdict = extract_json(response.ai_message.text)
+            if not isinstance(verdict, dict):
+                verdict = {"scores": {}, "verdict": "neutral"}
+        except Exception:
+            verdict = {"scores": {}, "verdict": "neutral"}
+        await event_publisher.publish_event(
+            state.research_id,
+            EventType.AGENT_RUNTIME,
+            f"报告评审: {verdict.get('verdict', 'neutral')}",
+            json.dumps(
+                {
+                    "kind": "report_judge",
+                    "scores": verdict.get("scores", {}),
+                    "verdict": verdict.get("verdict"),
+                    "highlight": verdict.get("highlight"),
+                    "gap": verdict.get("gap"),
+                },
+                ensure_ascii=False,
+            ),
+        )
+        return verdict
+
+    async def _synthesize_report(
+        self,
+        state: DeepResearchState,
+        champion_draft: str,
+        champion_score: float,
+        runner_ups: list,
+    ) -> str:
+        parts: list[str] = []
+        for i, ((_, draft), j) in enumerate(runner_ups):
+            scores = j.get("scores", {}) if isinstance(j, dict) else {}
+            total = sum(v for v in scores.values() if isinstance(v, (int, float)))
+            parts.append(
+                f"[Runner-up {i + 1}, 总分 {total}]\n亮点: {j.get('highlight', '')}\n{draft}"
+            )
+        runner_up_text = "\n\n---\n".join(parts)
+        prompt = REPORT_SYNTHESIS_PROMPT.format(
+            research_brief=state.research_brief or "",
+            champion_score=champion_score,
+            champion_draft=champion_draft,
+            runner_up_drafts=runner_up_text,
+        )
+        await event_publisher.publish_event(
+            state.research_id,
+            EventType.AGENT_RUNTIME,
+            "报告融合: 冠军 + 嫁接落选亮点",
+            json.dumps(
+                {"kind": "report_synthesize", "championScore": champion_score, "runnerUpCount": len(runner_ups)},
+                ensure_ascii=False,
+            ),
+        )
+        try:
+            response = await model_handler.get_chat_client(state.research_id).run_agent(
+                ResearchAgentRequest.text_only(
+                    "ReportSynthesizer",
+                    "",
+                    [ResearchMessage.user(prompt)],
+                    state.trace_context(),
+                ),
+            )
+            state.add_token_usage(response.token_usage)
+            return response.ai_message.text
+        except Exception:
+            logger.exception("report synthesis failed, fallback to champion draft")
+            return champion_draft
 
     async def verify_report_claims(self, state: DeepResearchState, report: str) -> str:
         """报告声明交叉验证：抽取带引用的关键声明，独立代理查验来源支撑。

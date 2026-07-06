@@ -102,7 +102,8 @@ function eventKind(event: WorkflowEvent): AgentFlowNodeKind {
   if (type === 'AGENT_RUNTIME') {
     const kind = event.runtimeMetadata?.kind || '';
     if (['team_task', 'team_lifecycle'].includes(kind)) return 'subagent';
-    if (['adversarial_reviewer', 'claim_verification'].includes(kind)) return 'decision';
+    if (['adversarial_reviewer', 'claim_verification', 'report_judge'].includes(kind)) return 'decision';
+    if (['report_draft', 'report_synthesize'].includes(kind)) return 'artifact';
     return 'tool';
   }
   if (type === 'ERROR') return 'error';
@@ -132,14 +133,12 @@ function eventTitle(event: WorkflowEvent) {
 
 function ownerAgentIdForEvent(event: WorkflowEvent, eventOwnerMap: Map<number, string>) {
   if (event.type?.toUpperCase() === 'AGENT_RUNTIME') {
-    switch (event.runtimeMetadata?.stage) {
-      case 'ScopeAgent': return 'agent-scope';
-      case 'ResearcherAgent':
-      case 'ResearchCompressorAgent': return 'agent-researcher';
-      case 'SearchAgent': return 'agent-search';
-      case 'ReportAgent': return 'agent-report';
-      default: return 'agent-supervisor';
-    }
+    const stage = event.runtimeMetadata?.stage || '';
+    if (stage === 'ScopeAgent') return 'agent-scope';
+    if (stage === 'ResearcherAgent' || stage === 'ResearchCompressorAgent') return 'agent-researcher';
+    if (stage === 'SearchAgent') return 'agent-search';
+    if (stage === 'ReportAgent' || stage.startsWith('ReportAgent:') || stage === 'ReportJudge' || stage === 'ReportSynthesizer' || stage === 'ClaimVerifier') return 'agent-report';
+    return 'agent-supervisor';
   }
   switch (event.type?.toUpperCase()) {
     case 'SCOPE':
@@ -179,10 +178,34 @@ function groupForEvent(event: WorkflowEvent, ownerId: string) {
     }
     if (kind === 'claim_verification') {
       return {
-        id: 'agent-supervisor:claim-verification',
+        id: 'agent-report:claim-verification',
         title: '声明交叉验证',
         subtitle: 'claim cross-check',
         kind: 'decision' as AgentFlowNodeKind,
+      };
+    }
+    if (kind === 'report_draft') {
+      return {
+        id: 'agent-report:drafts',
+        title: '多角度起草',
+        subtitle: '3 角度并行',
+        kind: 'artifact' as AgentFlowNodeKind,
+      };
+    }
+    if (kind === 'report_judge') {
+      return {
+        id: 'agent-report:judges',
+        title: '报告评委',
+        subtitle: '5 维打分',
+        kind: 'decision' as AgentFlowNodeKind,
+      };
+    }
+    if (kind === 'report_synthesize') {
+      return {
+        id: 'agent-report:synthesis',
+        title: '报告融合',
+        subtitle: '冠军 + 嫁接落选亮点',
+        kind: 'artifact' as AgentFlowNodeKind,
       };
     }
     const isTask = ['team_task', 'team_lifecycle'].includes(kind);
