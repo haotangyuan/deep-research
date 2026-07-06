@@ -491,6 +491,88 @@ ULTRA_DYNAMIC_REVIEW_PROMPT = """
 今天是 {date}。不要询问用户当前年份或日期。
 """
 
+ULTRA_REVIEWER_LENS_PROMPT = """
+你是 ULTRA 动态工作流的评审专家，从「{lens_desc}」视角评审当前轮次研究是否可进入报告。
+
+<Mission>
+基于本轮研究产物与证据账本，从指定视角判断是否还需继续补强。输出严格 JSON，不要额外文字。
+</Mission>
+
+<Lens Perspective>
+{lens_desc}
+{lens_focus}
+</Lens Perspective>
+
+<Round Context>
+- 当前轮次：{round_no}
+- 剩余动态轮次：{remaining_rounds}
+- 本轮目标：{round_goal}
+</Round Context>
+
+<Round Findings>
+{findings}
+</Round Findings>
+
+<Evidence Ledger>
+{evidence}
+</Evidence Ledger>
+
+<Output Schema>
+{{
+  "nextAction": "continue | report",
+  "scores": {{
+    "coverage": 1,
+    "evidence": 1,
+    "freshness": 1,
+    "sourceDiversity": 1,
+    "consistency": 1
+  }},
+  "gaps": ["该视角下的证据缺口"],
+  "rationale": "一句话说明判断依据"
+}}
+</Output Schema>
+
+<Rules>
+- 评分范围 1-5 整数。
+- 该视角下证据缺口仍明显时，nextAction 必须 continue。
+- 只有该视角下证据充分时才 report。
+- 不要输出 schema 之外的字段。
+</Rules>
+
+今天是 {date}。不要询问用户当前年份或日期。
+"""
+
+ULTRA_CLAIM_VERIFY_PROMPT = """
+你是事实核查专员，负责验证研究报告中的关键声明是否有来源支撑。
+
+<Mission>
+给定一个关键声明与证据账本，判断该声明是否有来源支撑。输出严格 JSON，不要额外文字。
+</Mission>
+
+<Claim>
+{claim}
+</Claim>
+
+<Evidence Ledger>
+{evidence}
+</Evidence Ledger>
+
+<Output Schema>
+{{
+  "verdict": "verified | unverified | no_source",
+  "supportingUrl": "支撑来源 URL（若有，否则空字符串）",
+  "reason": "判断依据（一句话）"
+}}
+</Output Schema>
+
+<Rules>
+- verified：证据账本中有来源直接支撑该声明。
+- unverified：有相关来源但不足以完全支撑（如部分数据对不上）。
+- no_source：证据账本中无相关来源。
+- 只输出 JSON。
+</Rules>
+"""
+
 REPORT_AGENT_PROMPT = """
 你是专业的研究报告撰写专员，负责将研究发现整合为高质量、结构清晰的深度研究报告。
 

@@ -100,7 +100,10 @@ function extractUrls(content = '') {
 function eventKind(event: WorkflowEvent): AgentFlowNodeKind {
   const type = event.type?.toUpperCase();
   if (type === 'AGENT_RUNTIME') {
-    return ['team_task', 'team_lifecycle'].includes(event.runtimeMetadata?.kind || '') ? 'subagent' : 'tool';
+    const kind = event.runtimeMetadata?.kind || '';
+    if (['team_task', 'team_lifecycle'].includes(kind)) return 'subagent';
+    if (['adversarial_reviewer', 'claim_verification'].includes(kind)) return 'decision';
+    return 'tool';
   }
   if (type === 'ERROR') return 'error';
   if (type === 'INTERVENTION') return 'decision';
@@ -165,7 +168,24 @@ function groupForEvent(event: WorkflowEvent, ownerId: string) {
   const title = event.title || '';
 
   if (type === 'AGENT_RUNTIME') {
-    const isTask = ['team_task', 'team_lifecycle'].includes(event.runtimeMetadata?.kind || '');
+    const kind = event.runtimeMetadata?.kind || '';
+    if (kind === 'adversarial_reviewer') {
+      return {
+        id: 'agent-supervisor:adversarial-review',
+        title: '对抗性审查',
+        subtitle: '多 reviewer 投票',
+        kind: 'decision' as AgentFlowNodeKind,
+      };
+    }
+    if (kind === 'claim_verification') {
+      return {
+        id: 'agent-supervisor:claim-verification',
+        title: '声明交叉验证',
+        subtitle: 'claim cross-check',
+        kind: 'decision' as AgentFlowNodeKind,
+      };
+    }
+    const isTask = ['team_task', 'team_lifecycle'].includes(kind);
     return {
       id: isTask ? 'agent-supervisor:agentscope-team' : `${ownerId}:agentscope-runtime`,
       title: isTask ? 'AgentScope Research Team' : 'AgentScope Runtime',

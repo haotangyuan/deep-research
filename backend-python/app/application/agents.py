@@ -37,6 +37,7 @@ from app.application.prompts import (
     RESEARCH_TASK_PLANNER_PROMPT,
     SUMMARIZE_WEBPAGE_PROMPT,
     TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT,
+    ULTRA_CLAIM_VERIFY_PROMPT,
 )
 from app.application.ultra_dynamic import (
     UltraDynamicRoundCoordinator,
@@ -899,9 +900,93 @@ class ReportAgent:
             )
             state.report = self._fallback_report(state, exc)
             complete_title = "研究报告已完成（降级）"
+        # 声明交叉验证（借鉴点 A2，仅 ULTRA 动态工作流）
+        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
+            try:
+                state.report = await self.verify_report_claims(state, state.report)
+            except Exception as exc:
+                logger.exception(
+                    "claim verification failed research_id=%s model_id=%s",
+                    state.research_id,
+                    state.trace_metadata_model.model_id,
+                )
         await event_publisher.publish_event(state.research_id, EventType.REPORT, complete_title, None)
         await event_publisher.publish_message(state.research_id, "assistant", state.report)
         return state.report
+
+    async def verify_report_claims(self, state: DeepResearchState, report: str) -> str:
+        """报告声明交叉验证：抽取带引用的关键声明，独立代理查验来源支撑。
+
+        借鉴 CC 声明级 cross-check：未验证标注 [未验证]，无来源标注 [缺来源]。
+        """
+        import re
+
+        sentences = re.split(r"(?<=[。.!?])\s*", report)
+        claims = [s.strip() for s in sentences if re.search(r"\[\d+\]", s) and len(s.strip()) > 15]
+        if not claims:
+            return report
+        evidence_text = "\n\n".join(state.supervisor_notes)
+        if len(evidence_text) > 8000:
+            evidence_text = evidence_text[:8000] + "\n\n[证据已截断]"
+        if not evidence_text.strip():
+            return report
+        claims_to_verify = claims[:8]
+
+        async def verify_one(claim: str) -> tuple[str, dict]:
+            prompt = ULTRA_CLAIM_VERIFY_PROMPT.format(claim=claim, evidence=evidence_text)
+            try:
+                response = await model_handler.get_chat_client(state.research_id).run_agent(
+                    ResearchAgentRequest.text_only(
+                        "ClaimVerifier",
+                        "",
+                        [ResearchMessage.user(prompt)],
+                        state.trace_context(),
+                    ),
+                )
+                state.add_token_usage(response.token_usage)
+                verdict = extract_json(response.ai_message.text)
+                if not isinstance(verdict, dict):
+                    verdict = {"verdict": "unverified"}
+            except Exception:
+                verdict = {"verdict": "unverified"}
+            return claim, verdict
+
+        results = await asyncio.gather(*(verify_one(c) for c in claims_to_verify))
+        verified_count = sum(1 for _, v in results if v.get("verdict") == "verified")
+        annotations: dict[str, str] = {}
+        for claim, v in results:
+            verdict = v.get("verdict", "unverified")
+            if verdict == "verified":
+                continue
+            annotations[claim] = "[缺来源]" if verdict == "no_source" else "[未验证]"
+
+        await event_publisher.publish_event(
+            state.research_id,
+            EventType.AGENT_RUNTIME,
+            f"声明交叉验证: {verified_count}/{len(results)} 通过",
+            json.dumps(
+                {
+                    "kind": "claim_verification",
+                    "verified": verified_count,
+                    "total": len(results),
+                    "unverified": len(results) - verified_count,
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+        if not annotations:
+            return report
+        annotated = report
+        for claim, tag in annotations.items():
+            if claim in annotated:
+                annotated = annotated.replace(claim, claim + " " + tag, 1)
+        annotated += (
+            "\n\n---\n**声明交叉验证**："
+            f"{verified_count}/{len(results)} 个关键声明经独立代理查验有来源支撑；"
+            "其余标注 [未验证] 或 [缺来源]，请人工复核。"
+        )
+        return annotated
 
     @staticmethod
     def _bounded_findings(supervisor_notes: list[str]) -> str:

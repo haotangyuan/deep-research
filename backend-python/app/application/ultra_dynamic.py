@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -7,7 +8,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy import select
 
-from app.application.prompts import ULTRA_DYNAMIC_REVIEW_PROMPT
+from app.application.prompts import ULTRA_REVIEWER_LENS_PROMPT
 from app.core.constants import EventType
 from app.core.json_utils import extract_json, truncate
 from app.core.timeutil import now_local, today_str
@@ -28,6 +29,26 @@ if TYPE_CHECKING:
 
 
 SOURCE_TYPE_KEYS = ("official", "academic", "report", "news", "company", "other")
+
+
+# 对抗性审查的评审视角（借鉴 CC Adversarial Verify 思想）
+REVIEWER_LENSES = [
+    {
+        "key": "evidence_sufficiency",
+        "desc": "证据充分性",
+        "focus": "重点判断每个章节是否有足够来源支撑，证据是否逐字保留、可追溯。",
+    },
+    {
+        "key": "source_authority",
+        "desc": "来源权威性",
+        "focus": "重点判断来源类型分布是否合理（official/academic/report 占比），是否过度依赖低权威来源。",
+    },
+    {
+        "key": "coverage_completeness",
+        "desc": "覆盖完整性",
+        "focus": "重点判断研究简报的核心问题是否被完整覆盖，有无遗漏维度。",
+    },
+]
 
 
 @dataclass(frozen=True)
@@ -348,7 +369,7 @@ class UltraDynamicRoundCoordinator:
     ) -> dict[str, Any]:
         round_no = max(1, state.dynamic_round_no)
         evidence_entries = collect_evidence_entries(state.research_id, round_no, results)
-        decision = await self._review_round(state, results, evidence_entries)
+        decision = await self._adversarial_review(state, results, evidence_entries)
         state.latest_dynamic_decision = decision
         state.dynamic_next_focus = decision.get("nextFocus") or None
         state.report_quality_context = build_report_quality_context(decision)
@@ -395,37 +416,100 @@ class UltraDynamicRoundCoordinator:
         )
         return decision
 
-    async def _review_round(
+    async def _adversarial_review(
         self,
         state: "DeepResearchState",
         results: list["ResearchResult"],
         evidence_entries: list[EvidenceLedgerEntry],
     ) -> dict[str, Any]:
-        prompt = ULTRA_DYNAMIC_REVIEW_PROMPT.format(
-            date=today_str(),
-            round_no=max(1, state.dynamic_round_no),
-            remaining_rounds=max(0, state.dynamic_max_rounds - state.dynamic_round_no),
-            research_brief=state.research_brief or "",
-            round_goal=state.current_planning_round_goal or state.research_brief or "",
-            findings=self._render_round_findings(results),
-            evidence=self._render_evidence(evidence_entries),
-            previous_decision=json.dumps(state.latest_dynamic_decision or {}, ensure_ascii=False),
-        )
+        """对抗性审查：N 个独立 reviewer 从不同 lens 并行评审，投票决定 nextAction。
+
+        借鉴 CC Adversarial Verify：默认倾向 refuted（report），多数（≥2）同意 continue 才 continue。
+        """
         fallback = build_fallback_round_decision(state, results, evidence_entries)
-        try:
-            response = await model_handler.get_chat_client(state.research_id).run_agent(
-                ResearchAgentRequest.text_only(
-                    "UltraDynamicReviewer",
-                    "",
-                    [ResearchMessage.user(prompt)],
-                    state.trace_context(),
-                ),
+        findings_text = self._render_round_findings(results)
+        evidence_text = self._render_evidence(evidence_entries)
+        round_no = max(1, state.dynamic_round_no)
+        remaining_rounds = max(0, state.dynamic_max_rounds - state.dynamic_round_no)
+        round_goal = state.current_planning_round_goal or state.research_brief or ""
+
+        async def run_reviewer(lens: dict[str, str]) -> dict[str, Any]:
+            prompt = ULTRA_REVIEWER_LENS_PROMPT.format(
+                date=today_str(),
+                lens_desc=lens["desc"],
+                lens_focus=lens["focus"],
+                round_no=round_no,
+                remaining_rounds=remaining_rounds,
+                round_goal=round_goal,
+                findings=findings_text,
+                evidence=evidence_text,
             )
-            state.add_token_usage(response.token_usage)
-            raw = extract_json(response.ai_message.text)
-            return self._normalize_round_decision(raw, fallback)
-        except Exception:
-            return fallback
+            try:
+                response = await model_handler.get_chat_client(state.research_id).run_agent(
+                    ResearchAgentRequest.text_only(
+                        "UltraDynamicReviewer:" + lens["key"],
+                        "",
+                        [ResearchMessage.user(prompt)],
+                        state.trace_context(),
+                    ),
+                )
+                state.add_token_usage(response.token_usage)
+                raw = extract_json(response.ai_message.text)
+                if not isinstance(raw, dict):
+                    raw = {}
+            except Exception:
+                raw = {}
+            vote = {
+                "lens": lens["key"],
+                "lensDesc": lens["desc"],
+                "nextAction": raw.get("nextAction") or "report",
+                "scores": raw.get("scores") or {},
+                "gaps": raw.get("gaps") or [],
+                "rationale": raw.get("rationale") or "",
+            }
+            await event_publisher.publish_event(
+                state.research_id,
+                EventType.AGENT_RUNTIME,
+                f"评审投票: {lens['desc']} → {vote['nextAction']}",
+                json.dumps(
+                    {"kind": "adversarial_reviewer", **vote},
+                    ensure_ascii=False,
+                ),
+                state.current_supervisor_event_id,
+            )
+            return vote
+
+        votes = await asyncio.gather(*(run_reviewer(lens) for lens in REVIEWER_LENSES))
+
+        # 聚合：≥2 票 continue 才 continue，否则 report（默认 refuted 倾向）
+        continue_count = sum(1 for v in votes if v.get("nextAction") == "continue")
+        next_action = "continue" if continue_count >= 2 else "report"
+
+        # 评分合并：取各维度最低（短板原则）
+        merged_scores: dict[str, Any] = {}
+        for dim in ("coverage", "evidence", "freshness", "sourceDiversity", "consistency"):
+            dim_scores = [
+                v.get("scores", {}).get(dim)
+                for v in votes
+                if isinstance(v.get("scores", {}).get(dim), (int, float))
+            ]
+            merged_scores[dim] = min(dim_scores) if dim_scores else 1
+
+        all_gaps: list[str] = []
+        for v in votes:
+            all_gaps.extend(v.get("gaps") or [])
+
+        return {
+            "nextAction": next_action,
+            "strategy": f"{continue_count}/{len(votes)} 评审同意 {'继续补强' if next_action == 'continue' else '进入报告'}",
+            "deltaSummary": fallback.get("deltaSummary", ""),
+            "qualityScoreboard": merged_scores,
+            "sectionScoreboard": fallback.get("sectionScoreboard", []),
+            "sourceTypeBreakdown": fallback.get("sourceTypeBreakdown", {}),
+            "nextFocus": fallback.get("nextFocus", {}),
+            "blockingGaps": all_gaps[:5],
+            "votes": votes,
+        }
 
     async def _create_round_record(
         self,
