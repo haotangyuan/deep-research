@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.infrastructure.observability import ResearchTraceMetadata
 from app.domain.runtime import ResearchMessage, ResearchTokenUsage
@@ -48,6 +48,20 @@ class ResearcherSource(BaseModel):
     snippet: str | None = None
     section_hint: str | None = None
 
+    @field_validator("type")
+    @classmethod
+    def normalize_type(cls, value: str) -> str:
+        allowed = {"official", "academic", "report", "news", "company", "other"}
+        normalized = (value or "other").strip().lower()
+        return normalized if normalized in allowed else "other"
+
+    @field_validator("strength")
+    @classmethod
+    def normalize_strength(cls, value: str) -> str:
+        allowed = {"high", "medium", "low"}
+        normalized = (value or "medium").strip().lower()
+        return normalized if normalized in allowed else "medium"
+
 
 class DeepResearchState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -72,6 +86,8 @@ class DeepResearchState(BaseModel):
     research_brief: str | None = None
     research_type: str | None = None
     research_type_confidence: float = 0.0
+    research_type_reason: str | None = None
+    research_type_candidates: list[dict[str, Any]] = Field(default_factory=list)
     workflow_template: dict[str, Any] | None = None
 
     budget: BudgetSnapshot

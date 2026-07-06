@@ -76,7 +76,7 @@ AgentScope 已不再只是底层 Agent 调用适配器，而是项目的 **Agent
 项目描述：构建基于多 Agent 协作的自动化深度研究平台，覆盖需求澄清、任务规划、并行检索、网页摘要、报告生成、人工确认、断点恢复与实时链路展示。
 
 - **分层架构设计**：采用「业务状态机 + Agent 运行时」分层架构——外层 `AgentPipeline` 基于 MySQL/Redis 维护 QUEUE、SCOPE、HITL、IN_RESEARCH、IN_REPORT、COMPLETED 等可恢复的业务状态机，内层 AgentScope 2.0.3 负责 Agent 生命周期、隔离 `AgentState`、原生 `TaskContext`、Leader/Worker 团队、Toolkit、Middleware 与 tracing；该边界把数据库事务、前端协议与框架内部解耦，让框架承担认知执行，业务层掌控持久化与一致性。
-- **ULTRA 动态工作流档位**：在 ULTRA 预算下设计 Supervisor 驱动的多轮规划闭环（最多 5 轮），每轮由 LLM 作为研究经理输出 5 维质量评分（coverage/evidence/freshness/sourceDiversity/consistency）+ section 评分板 + 来源类型分布，据此决策「继续补强」或「生成报告」；引入证据账本（`research_evidence_ledger`）对来源自动分类（official/academic/report/news/company），并支持用户对下一轮重点章节与强化模式进行轻量干预，在预算或轮次耗尽时优雅终止并标注证据缺口。
+- **ULTRA 动态工作流档位**：设计质量优先的动态研究编排：ScopeAgent 在生成 research brief 时同步识别研究类型，并选择 JSON 编排模板控制轮次、预算、reviewer lens、报告起草角度与声明验证策略；Researcher 输出结构化 findings + sources 供证据账本消费，Supervisor 通过多 reviewer 对抗审查和 5 维质量评分决定「继续补强 / 进入报告」，ReportAgent 支持多角度起草、评委打分、融合与关键声明交叉验证；同时保留用户轻干预、预算耗尽降级和证据缺口披露，兼顾质量、可解释性与成本边界。
 - **HITL 与可靠状态恢复**：实现研究方向 APPROVE/REVISE 确认（范围分析后暂停等待用户反馈）、失败续跑与取消清理；将业务 checkpoint、AgentScope 任务状态及有界 runtime snapshot 保存至 Redis，通过数据库 CAS 限制合法状态迁移，避免重复执行与并发误操作，断点恢复时优先复用 checkpoint 跳过已完成阶段。
 - **可解释进度与用户可干预研究过程**：设计 MySQL + Redis ZSet 双写时间线和 `Last-Event-ID` 断线重放，保证 SSE 断线后无损恢复；通过 Event Bridge 将动态决策、任务批次、干预事件和采纳结果映射为兼容事件，前端分层展示研究进度、决策依据与下一轮调整回显，使多轮研究过程对用户全程透明可干预。
 - **性能治理与全链路可观测性**：实现预算限流、搜索/摘要 TTL 缓存、in-flight 合并、网页 AgentState 隔离、超时降级与报告输入上限，保障高并发下的稳定性与成本可控；以 OpenTelemetry 贯通 `workflow → stage → AgentScope agent → model/tool` 全链路，通过 OTLP 导出 Langfuse，支持 Token、延迟、异常和调用上下文追踪，线上排障可按需开启脱敏后的 IO 采集。

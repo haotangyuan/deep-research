@@ -485,11 +485,12 @@ class AgentPipeline:
         research_id = state.research_id
         # 意图识别 + 模板选择（借鉴点 E）：scope 后按 researchType 选模板
         if not state.workflow_template:
-            from app.application.workflow_template import select_template
+            from app.application.workflow_template import select_template, template_budget
 
             template = select_template(state.research_type, state.research_type_confidence)
             state.workflow_template = template
             state.dynamic_max_rounds = int(template.get("maxRounds", state.dynamic_max_rounds))
+            state.budget = state.budget.model_copy(update=template_budget(template))
             await event_publisher.publish_event(
                 research_id,
                 EventType.AGENT_RUNTIME,

@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from sqlalchemy import select
 
@@ -54,6 +55,7 @@ from app.infrastructure.tavily import tavily_client
 from app.core.timeutil import today_str
 from app.application.tools import RESEARCHER_STAGE_TOOLS, execute_simple_tool
 from app.application.research_team import research_team
+from app.application.workflow_template import claim_verification_enabled, draft_angles, report_judge_enabled
 
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,11 @@ ultra_dynamic_round_coordinator = UltraDynamicRoundCoordinator()
 def _safe_error_summary(exc: Exception) -> str:
     raw = f"{exc.__class__.__name__}: {exc}".strip()
     return summarize(raw) or exc.__class__.__name__
+
+
+def _valid_http_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 class ScopeAgent:
@@ -178,12 +185,38 @@ class ScopeAgent:
 
             state.research_type = research_type if research_type in RESEARCH_TYPES else "general"
             state.research_type_confidence = type_confidence
+            state.research_type_reason = truncate(str(question.get("typeReason") or ""), 500) or None
+            candidates: list[dict[str, Any]] = []
+            for item in list(question.get("typeCandidates") or []):
+                if not isinstance(item, dict):
+                    continue
+                candidate_type = str(item.get("type") or "").strip().lower()
+                if candidate_type not in RESEARCH_TYPES:
+                    continue
+                try:
+                    candidate_confidence = float(item.get("confidence") or 0.0)
+                except (TypeError, ValueError):
+                    candidate_confidence = 0.0
+                candidates.append(
+                    {
+                        "type": candidate_type,
+                        "confidence": max(0.0, min(1.0, candidate_confidence)),
+                        "reason": truncate(str(item.get("reason") or ""), 240),
+                    },
+                )
+            state.research_type_candidates = candidates[:3]
             await event_publisher.publish_event(
                 state.research_id,
                 EventType.AGENT_RUNTIME,
                 f"意图识别: {state.research_type}（置信度 {type_confidence:.2f}）",
                 json.dumps(
-                    {"kind": "intent_recognition", "researchType": state.research_type, "confidence": type_confidence},
+                    {
+                        "kind": "intent_recognition",
+                        "researchType": state.research_type,
+                        "confidence": type_confidence,
+                        "reason": state.research_type_reason,
+                        "candidates": state.research_type_candidates,
+                    },
                     ensure_ascii=False,
                 ),
                 state.current_scope_event_id,
@@ -643,7 +676,7 @@ class ResearcherAgent:
             if not isinstance(item, dict):
                 continue
             url = str(item.get("url") or "").strip()
-            if not url or url in seen_urls:
+            if not url or not _valid_http_url(url) or url in seen_urls:
                 continue
             seen_urls.add(url)
             sources.append(
@@ -666,7 +699,7 @@ class ResearcherAgent:
         seen: set[str] = set()
         for item in state.search_results.values():
             url = (item.url or "").strip()
-            if not url or url in seen:
+            if not url or not _valid_http_url(url) or url in seen:
                 continue
             seen.add(url)
             sources.append(
@@ -953,10 +986,7 @@ class ReportAgent:
                 state.report = self._fallback_report(state, exc)
                 complete_title = "研究报告已完成（降级）"
         # 声明交叉验证（借鉴点 A2），claimVerification 从编排模板读
-        claim_verification = True
-        if isinstance(state.workflow_template, dict):
-            claim_verification = bool(state.workflow_template.get("claimVerification", True))
-        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC and claim_verification:
+        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC and claim_verification_enabled(state.workflow_template):
             try:
                 state.report = await self.verify_report_claims(state, state.report)
             except Exception as exc:
@@ -972,9 +1002,7 @@ class ReportAgent:
     @staticmethod
     def _angles_for_state(state: DeepResearchState) -> list[dict]:
         """从编排模板读取起草角度，fallback 到默认全部角度。"""
-        angle_keys = None
-        if isinstance(state.workflow_template, dict):
-            angle_keys = state.workflow_template.get("draftAngles")
+        angle_keys = draft_angles(state.workflow_template)
         if angle_keys:
             key_set = set(angle_keys)
             order = {k: i for i, k in enumerate(angle_keys)}
@@ -1001,7 +1029,7 @@ class ReportAgent:
         valid = [(a, d) for a, d in zip(angles, drafts) if d]
         if not valid:
             raise RuntimeError("all draft angles failed")
-        if len(valid) == 1:
+        if len(valid) == 1 or not report_judge_enabled(state.workflow_template):
             return valid[0][1]
 
         # 阶段2：评委并行打分
@@ -1087,6 +1115,7 @@ class ReportAgent:
                     "verdict": verdict.get("verdict"),
                     "highlight": verdict.get("highlight"),
                     "gap": verdict.get("gap"),
+                    "graftSuggestions": verdict.get("graftSuggestions") or [],
                 },
                 ensure_ascii=False,
             ),
@@ -1104,8 +1133,17 @@ class ReportAgent:
         for i, ((_, draft), j) in enumerate(runner_ups):
             scores = j.get("scores", {}) if isinstance(j, dict) else {}
             total = sum(v for v in scores.values() if isinstance(v, (int, float)))
+            suggestions = [
+                str(item)
+                for item in list(j.get("graftSuggestions") or [])
+                if str(item).strip()
+            ][:3]
+            suggestion_text = "；".join(suggestions) if suggestions else "无"
             parts.append(
-                f"[Runner-up {i + 1}, 总分 {total}]\n亮点: {j.get('highlight', '')}\n{draft}"
+                f"[Runner-up {i + 1}, 总分 {total}]\n"
+                f"亮点: {j.get('highlight', '')}\n"
+                f"必须嫁接建议: {suggestion_text}\n"
+                f"{draft}"
             )
         runner_up_text = "\n\n---\n".join(parts)
         prompt = REPORT_SYNTHESIS_PROMPT.format(

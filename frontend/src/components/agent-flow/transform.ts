@@ -188,7 +188,7 @@ function groupForEvent(event: WorkflowEvent, ownerId: string) {
       return {
         id: 'agent-report:drafts',
         title: '多角度起草',
-        subtitle: '3 角度并行',
+        subtitle: '模板角度并行',
         kind: 'artifact' as AgentFlowNodeKind,
       };
     }

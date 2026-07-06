@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from sqlalchemy import select
 
 from app.application.prompts import ULTRA_REVIEWER_LENS_PROMPT
+from app.application.workflow_template import continue_threshold, reviewer_count, reviewer_lenses
 from app.core.constants import EventType
 from app.core.json_utils import extract_json, truncate
 from app.core.timeutil import now_local, today_str
@@ -479,16 +480,27 @@ class UltraDynamicRoundCoordinator:
             )
             return vote
 
-        # reviewer 数量从编排模板读（借鉴点 E），fallback 到全部 lens
-        reviewer_count = 3
-        if isinstance(state.workflow_template, dict):
-            reviewer_count = int(state.workflow_template.get("reviewerCount", 3))
-        lenses = REVIEWER_LENSES[: max(1, min(reviewer_count, len(REVIEWER_LENSES)))]
+        # reviewer 数量与 lens 从编排模板读（借鉴点 E），fallback 到默认 lens
+        configured_lenses = reviewer_lenses(state.workflow_template)
+        lens_map = {lens["key"]: lens for lens in REVIEWER_LENSES}
+        lenses = [lens_map[key] for key in configured_lenses if key in lens_map]
+        if not lenses:
+            lenses = list(REVIEWER_LENSES)
+        count = reviewer_count(state.workflow_template)
+        lenses = lenses[: max(1, min(count, len(lenses)))]
         votes = await asyncio.gather(*(run_reviewer(lens) for lens in lenses))
 
-        # 聚合：≥2 票 continue 才 continue，否则 report（默认 refuted 倾向）
+        # 聚合：达到模板阈值才 continue，否则 report（默认 refuted 倾向）
         continue_count = sum(1 for v in votes if v.get("nextAction") == "continue")
-        next_action = "continue" if continue_count >= 2 else "report"
+        threshold = continue_threshold(state.workflow_template)
+        report_count = len(votes) - continue_count
+        next_action = "continue" if continue_count >= threshold else "report"
+        if continue_count == len(votes):
+            consensus = "continue"
+        elif report_count == len(votes):
+            consensus = "report"
+        else:
+            consensus = "split"
 
         # 评分合并：取各维度最低（短板原则）
         merged_scores: dict[str, Any] = {}
@@ -513,6 +525,13 @@ class UltraDynamicRoundCoordinator:
             "sourceTypeBreakdown": fallback.get("sourceTypeBreakdown", {}),
             "nextFocus": fallback.get("nextFocus", {}),
             "blockingGaps": all_gaps[:5],
+            "reviewSummary": {
+                "continueVotes": continue_count,
+                "reportVotes": report_count,
+                "totalVotes": len(votes),
+                "continueThreshold": threshold,
+                "consensus": consensus,
+            },
             "votes": votes,
         }
 

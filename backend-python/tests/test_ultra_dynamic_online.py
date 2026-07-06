@@ -4,9 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.application.agents import ResearchResult, ResearchTask, report_agent
+from app.application.agents import ResearchResult, ResearchTask, report_agent, researcher_agent, scope_agent
 from app.application.pipeline import AgentPipeline
+from app.application.workflow_template import load_template, normalize_template
 from app.core.constants import WorkflowMode, WorkflowStatus
+from app.domain.runtime import ResearchMemory
 from app.domain.state import BudgetSnapshot, DeepResearchState, TavilySearchResult, TraceMetadataModel
 
 
@@ -105,6 +107,87 @@ def test_fallback_round_decision_requests_continue_when_evidence_is_thin() -> No
     assert decision["qualityScoreboard"]["evidence"] < 4
 
 
+def test_fact_lookup_template_uses_documented_nested_schema() -> None:
+    template = load_template("fact_lookup")
+
+    assert template["version"] == 1
+    assert template["reviewer"]["count"] == 2
+    assert template["report"]["draftAngles"] == ["data-driven"]
+    assert template["report"]["claimVerification"] is False
+
+
+def test_template_validation_rejects_unknown_or_impossible_config() -> None:
+    with pytest.raises(ValueError):
+        normalize_template(
+            {
+                "type": "general",
+                "maxRounds": 1,
+                "reviewer": {"count": 1, "lenses": ["unknown_lens"], "continueThreshold": 1},
+                "report": {"draftAngles": ["data-driven"]},
+                "budget": {"maxConductCount": 1, "maxSearchCount": 1, "maxConcurrentUnits": 1},
+            },
+        )
+
+    with pytest.raises(ValueError):
+        normalize_template(
+            {
+                "type": "general",
+                "maxRounds": 1,
+                "reviewer": {"count": 1, "lenses": ["evidence_sufficiency"], "continueThreshold": 2},
+                "report": {"draftAngles": ["unknown-angle"]},
+                "budget": {"maxConductCount": 1, "maxSearchCount": 1, "maxConcurrentUnits": 1},
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_scope_agent_publishes_intent_reason_and_candidates(monkeypatch) -> None:
+    state = _make_state()
+    memory = ResearchMemory(10)
+    published: list[tuple] = []
+
+    class FakeClient:
+        async def run_agent(self, _request):
+            return SimpleNamespace(
+                token_usage=None,
+                ai_message=SimpleNamespace(
+                    text="""
+{
+  "researchBrief": "我想快速了解 Redis 是什么。",
+  "researchType": "fact_lookup",
+  "typeConfidence": 0.91,
+  "typeReason": "用户请求是定义类事实查询，不需要多轮行业或学术综述。",
+  "typeCandidates": [
+    {"type": "fact_lookup", "confidence": 0.91, "reason": "定义类问题"},
+    {"type": "general", "confidence": 0.09, "reason": "范围很小但仍可通用处理"}
+  ]
+}
+""",
+                ),
+            )
+
+    async def publish_event(*args, **kwargs):
+        published.append((args, kwargs))
+        return 1
+
+    monkeypatch.setattr("app.application.agents.model_handler.get_chat_client", lambda _research_id: FakeClient())
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_event", publish_event)
+
+    await scope_agent._write_research_brief(memory, state)
+
+    assert state.research_type == "fact_lookup"
+    assert state.research_type_confidence == pytest.approx(0.91)
+    assert state.research_type_reason == "用户请求是定义类事实查询，不需要多轮行业或学术综述。"
+    assert state.research_type_candidates[0]["type"] == "fact_lookup"
+    intent_payload = next(
+        args[3]
+        for args, _kwargs in published
+        if len(args) >= 4 and args[2].startswith("意图识别:")
+    )
+    assert '"reason": "用户请求是定义类事实查询，不需要多轮行业或学术综述。"' in intent_payload
+    assert '"candidates"' in intent_payload
+
+
 @pytest.mark.asyncio
 async def test_finalize_round_updates_state_and_persists_records(monkeypatch) -> None:
     from app.application.ultra_dynamic import UltraDynamicRoundCoordinator
@@ -193,6 +276,157 @@ async def test_finalize_round_updates_state_and_persists_records(monkeypatch) ->
 
 
 @pytest.mark.asyncio
+async def test_finalize_round_uses_nested_reviewer_count(monkeypatch) -> None:
+    from app.application.ultra_dynamic import UltraDynamicRoundCoordinator
+
+    state = _make_state(round_no=1, max_rounds=4, conduct_count=2, max_conduct_count=6)
+    state.workflow_template = {"reviewer": {"count": 1}}
+    state.current_planning_round_id = 99
+    tasks = [ResearchTask(0, "政策监管", "中国 AI 搜索监管趋势", "task-0", "worker-0")]
+    results = [
+        ResearchResult(
+            0,
+            "政策监管",
+            "中国 AI 搜索监管趋势",
+            "已有政策摘要",
+            _make_branch_state("https://www.gov.cn/policy/2026-07/01/content_1.htm"),
+        ),
+    ]
+    reviewer_calls: list[str] = []
+
+    class FakeClient:
+        async def run_agent(self, request):
+            reviewer_calls.append(request.stage_name)
+            return SimpleNamespace(
+                token_usage=None,
+                ai_message=SimpleNamespace(
+                    text='{"nextAction":"report","scores":{"coverage":4,"evidence":4,"freshness":4,"sourceDiversity":4,"consistency":4},"gaps":[],"rationale":"ok"}',
+                ),
+            )
+
+    async def noop(*_args, **_kwargs):
+        return 1
+
+    monkeypatch.setattr("app.application.ultra_dynamic.model_handler.get_chat_client", lambda _research_id: FakeClient())
+    monkeypatch.setattr("app.application.ultra_dynamic.event_publisher.publish_event", noop)
+    monkeypatch.setattr("app.application.ultra_dynamic.event_publisher.publish_message", noop)
+
+    coordinator = UltraDynamicRoundCoordinator()
+    monkeypatch.setattr(coordinator, "_persist_round_summary", noop)
+    monkeypatch.setattr(coordinator, "_persist_work_item_results", noop)
+    monkeypatch.setattr(coordinator, "_persist_decision_log", noop)
+    monkeypatch.setattr(coordinator, "_persist_evidence_entries", noop)
+
+    decision = await coordinator.finalize_round(state, tasks, results)
+
+    assert decision["nextAction"] == "report"
+    assert reviewer_calls == ["UltraDynamicReviewer:evidence_sufficiency"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_round_records_review_summary(monkeypatch) -> None:
+    from app.application.ultra_dynamic import UltraDynamicRoundCoordinator
+
+    state = _make_state(round_no=1, max_rounds=4, conduct_count=2, max_conduct_count=6)
+    state.workflow_template = {
+        "reviewer": {
+            "count": 2,
+            "lenses": ["evidence_sufficiency", "source_authority"],
+            "continueThreshold": 2,
+        },
+    }
+    state.current_planning_round_id = 99
+    tasks = [ResearchTask(0, "政策监管", "中国 AI 搜索监管趋势", "task-0", "worker-0")]
+    results = [
+        ResearchResult(
+            0,
+            "政策监管",
+            "中国 AI 搜索监管趋势",
+            "已有政策摘要",
+            _make_branch_state("https://www.gov.cn/policy/2026-07/01/content_1.htm"),
+        ),
+    ]
+
+    class FakeClient:
+        async def run_agent(self, request):
+            action = "continue" if request.stage_name.endswith("evidence_sufficiency") else "report"
+            return SimpleNamespace(
+                token_usage=None,
+                ai_message=SimpleNamespace(
+                    text=(
+                        '{"nextAction":"%s","scores":{"coverage":4,"evidence":3,"freshness":4,'
+                        '"sourceDiversity":3,"consistency":4},"gaps":["补官方来源"],"rationale":"ok"}'
+                    )
+                    % action,
+                ),
+            )
+
+    async def noop(*_args, **_kwargs):
+        return 1
+
+    monkeypatch.setattr("app.application.ultra_dynamic.model_handler.get_chat_client", lambda _research_id: FakeClient())
+    monkeypatch.setattr("app.application.ultra_dynamic.event_publisher.publish_event", noop)
+    monkeypatch.setattr("app.application.ultra_dynamic.event_publisher.publish_message", noop)
+
+    coordinator = UltraDynamicRoundCoordinator()
+    monkeypatch.setattr(coordinator, "_persist_round_summary", noop)
+    monkeypatch.setattr(coordinator, "_persist_work_item_results", noop)
+    monkeypatch.setattr(coordinator, "_persist_decision_log", noop)
+    monkeypatch.setattr(coordinator, "_persist_evidence_entries", noop)
+
+    decision = await coordinator.finalize_round(state, tasks, results)
+
+    assert decision["nextAction"] == "report"
+    assert decision["reviewSummary"] == {
+        "continueVotes": 1,
+        "reportVotes": 1,
+        "totalVotes": 2,
+        "continueThreshold": 2,
+        "consensus": "split",
+    }
+
+
+def test_parse_compressed_research_normalizes_sources() -> None:
+    state = _make_branch_state("https://example.com/source")
+    text = """
+{
+  "findings": "结论",
+  "sources": [
+    {
+      "url": "https://example.com/source",
+      "title": "Example",
+      "type": "blog",
+      "strength": "excellent",
+      "snippet": "snippet",
+      "sectionHint": "章节"
+    },
+    {
+      "url": "https://example.com/source",
+      "title": "Duplicate",
+      "type": "official",
+      "strength": "high"
+    },
+    {
+      "url": "not-a-url",
+      "title": "Bad",
+      "type": "official",
+      "strength": "high"
+    }
+  ]
+}
+"""
+
+    findings, sources = researcher_agent._parse_compressed_research(text, state)
+
+    assert findings == "结论"
+    assert len(sources) == 1
+    assert sources[0].url == "https://example.com/source"
+    assert sources[0].type == "other"
+    assert sources[0].strength == "medium"
+    assert sources[0].section_hint == "章节"
+
+
+@pytest.mark.asyncio
 async def test_ultra_pipeline_can_continue_without_pending_intervention(monkeypatch) -> None:
     state = _make_state(round_no=0, max_rounds=3, conduct_count=0, max_conduct_count=6)
     pipeline = AgentPipeline()
@@ -271,7 +505,7 @@ async def test_report_agent_includes_quality_context(monkeypatch) -> None:
 
     class FakeClient:
         async def run_agent(self, request):
-            captured["prompt"] = request.messages[-1].text
+            captured[request.stage_name] = request.messages[-1].text
             return SimpleNamespace(
                 token_usage=None,
                 ai_message=SimpleNamespace(text="# 报告\n\n## 来源\n\n[1] [示例](https://example.com)"),
@@ -289,6 +523,124 @@ async def test_report_agent_includes_quality_context(monkeypatch) -> None:
 
     await report_agent.run(state)
 
-    assert "报告前验证未完全通过" in captured["prompt"]
-    assert "政策监管" in captured["prompt"]
-    assert "缺政策原文" in captured["prompt"]
+    assert "报告前验证未完全通过" in captured["ReportAgent:data-driven"]
+    assert "政策监管" in captured["ReportAgent:data-driven"]
+    assert "缺政策原文" in captured["ReportAgent:data-driven"]
+
+
+@pytest.mark.asyncio
+async def test_report_agent_uses_nested_report_template(monkeypatch) -> None:
+    calls: list[str] = []
+    state = _make_state()
+    state.workflow_template = {
+        "report": {
+            "draftAngles": ["data-driven"],
+            "claimVerification": False,
+        },
+    }
+    state.supervisor_notes = ["## 研究任务拆解\n\n1. 市场格局"]
+
+    class FakeClient:
+        async def run_agent(self, request):
+            calls.append(request.stage_name)
+            return SimpleNamespace(
+                token_usage=None,
+                ai_message=SimpleNamespace(text="# 报告\n\n## 来源\n\n[1] [示例](https://example.com)"),
+            )
+
+    async def publish_event(*_args, **_kwargs):
+        return 1
+
+    async def publish_message(*_args, **_kwargs):
+        return 1
+
+    monkeypatch.setattr("app.application.agents.model_handler.get_chat_client", lambda _research_id: FakeClient())
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_event", publish_event)
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_message", publish_message)
+
+    await report_agent.run(state)
+
+    assert calls == ["ReportAgent:data-driven"]
+
+
+@pytest.mark.asyncio
+async def test_report_agent_can_disable_judge_from_template(monkeypatch) -> None:
+    calls: list[str] = []
+    state = _make_state()
+    state.workflow_template = {
+        "report": {
+            "draftAngles": ["data-driven", "narrative"],
+            "judgeEnabled": False,
+            "claimVerification": False,
+        },
+    }
+    state.supervisor_notes = ["## 研究任务拆解\n\n1. 市场格局"]
+
+    class FakeClient:
+        async def run_agent(self, request):
+            calls.append(request.stage_name)
+            return SimpleNamespace(
+                token_usage=None,
+                ai_message=SimpleNamespace(text=f"# {request.stage_name} 报告"),
+            )
+
+    async def publish_event(*_args, **_kwargs):
+        return 1
+
+    async def publish_message(*_args, **_kwargs):
+        return 1
+
+    monkeypatch.setattr("app.application.agents.model_handler.get_chat_client", lambda _research_id: FakeClient())
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_event", publish_event)
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_message", publish_message)
+
+    report = await report_agent.run(state)
+
+    assert calls == ["ReportAgent:data-driven", "ReportAgent:narrative"]
+    assert report == "# ReportAgent:data-driven 报告"
+
+
+@pytest.mark.asyncio
+async def test_report_synthesis_receives_judge_graft_suggestions(monkeypatch) -> None:
+    prompts_by_stage: dict[str, str] = {}
+    state = _make_state()
+    state.workflow_template = {
+        "report": {
+            "draftAngles": ["data-driven", "narrative"],
+            "claimVerification": False,
+        },
+    }
+    state.supervisor_notes = ["## 研究任务拆解\n\n1. 市场格局"]
+
+    class FakeClient:
+        async def run_agent(self, request):
+            prompts_by_stage[request.stage_name] = request.messages[-1].text
+            if request.stage_name.startswith("ReportAgent:"):
+                return SimpleNamespace(
+                    token_usage=None,
+                    ai_message=SimpleNamespace(text=f"# {request.stage_name}\n\n正文 [1]"),
+                )
+            if request.stage_name == "ReportJudge":
+                text = """
+{
+  "scores": {"coverage": 4, "evidence": 4, "structure": 4, "readability": 4, "sourcing": 4},
+  "verdict": "strong",
+  "highlight": "结构清晰",
+  "gap": "数据略少",
+  "graftSuggestions": ["保留关键对比表", "补充风险小结"]
+}
+"""
+                return SimpleNamespace(token_usage=None, ai_message=SimpleNamespace(text=text))
+            return SimpleNamespace(token_usage=None, ai_message=SimpleNamespace(text="# final"))
+
+    async def publish_event(*_args, **_kwargs):
+        return 1
+
+    monkeypatch.setattr("app.application.agents.model_handler.get_chat_client", lambda _research_id: FakeClient())
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_event", publish_event)
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_message", publish_event)
+
+    await report_agent.run(state)
+
+    assert "必须嫁接建议" in prompts_by_stage["ReportSynthesizer"]
+    assert "保留关键对比表" in prompts_by_stage["ReportSynthesizer"]

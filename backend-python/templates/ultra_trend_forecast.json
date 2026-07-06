@@ -1,7 +1,25 @@
 {
+  "version": 1,
   "type": "trend_forecast",
+  "mode": "ultra_dynamic",
   "maxRounds": 4,
-  "reviewerCount": 3,
-  "draftAngles": ["narrative", "data-driven", "comparative"],
-  "claimVerification": true
+  "reviewer": {
+    "count": 3,
+    "lenses": ["evidence_sufficiency", "source_authority", "coverage_completeness"],
+    "continueThreshold": 2
+  },
+  "report": {
+    "draftAngles": ["narrative", "data-driven", "comparative"],
+    "judgeEnabled": true,
+    "claimVerification": true
+  },
+  "intervention": {
+    "enabled": true,
+    "applyMode": "next_round_planner_bias"
+  },
+  "budget": {
+    "maxConductCount": 6,
+    "maxSearchCount": 4,
+    "maxConcurrentUnits": 3
+  }
 }

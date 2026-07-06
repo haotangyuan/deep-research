@@ -1,7 +1,25 @@
 {
+  "version": 1,
   "type": "market_analysis",
+  "mode": "ultra_dynamic",
   "maxRounds": 5,
-  "reviewerCount": 3,
-  "draftAngles": ["data-driven", "narrative", "comparative"],
-  "claimVerification": true
+  "reviewer": {
+    "count": 3,
+    "lenses": ["source_authority", "evidence_sufficiency", "coverage_completeness"],
+    "continueThreshold": 2
+  },
+  "report": {
+    "draftAngles": ["data-driven", "comparative", "narrative"],
+    "judgeEnabled": true,
+    "claimVerification": true
+  },
+  "intervention": {
+    "enabled": true,
+    "applyMode": "next_round_planner_bias"
+  },
+  "budget": {
+    "maxConductCount": 6,
+    "maxSearchCount": 4,
+    "maxConcurrentUnits": 3
+  }
 }

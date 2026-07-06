@@ -13,7 +13,7 @@ export const BUDGET_OPTIONS: { value: BudgetValue; label: string; caption: strin
   },
   {
     value: 'ULTRA',
-    label: '旗舰',
-    caption: '6主题/4搜/并发3',
+    label: '旗舰 · 动态',
+    caption: 'ULTRA动态工作流 · 6主题/4搜/并发3',
   },
 ];

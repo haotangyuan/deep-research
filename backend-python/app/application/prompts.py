@@ -156,7 +156,12 @@ TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT = """
 {{
   "researchBrief": "完整的研究简报文本",
   "researchType": "tech_comparison | market_analysis | academic_review | fact_lookup | trend_forecast | general",
-  "typeConfidence": 0.0
+  "typeConfidence": 0.0,
+  "typeReason": "为什么选择该研究类型，说明触发模板选择的关键信号",
+  "typeCandidates": [
+    {{"type": "fact_lookup", "confidence": 0.82, "reason": "用户是在询问定义/事实"}},
+    {{"type": "general", "confidence": 0.18, "reason": "问题较短，仍可能按通用模板处理"}}
+  ]
 }}
 </Output Schema>
 
@@ -170,6 +175,8 @@ TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT = """
 - general：通用/不确定
 
 typeConfidence 为 0-1 的浮点数，表示对该类型判断的置信度。不确定时用 general 并给较低置信度。
+typeReason 用一句话解释判断依据。
+typeCandidates 最多 3 个，按 confidence 从高到低排列，只能使用上述研究类型枚举。
 </Research Type Rules>
 
 今天是 {date}。
@@ -763,7 +770,8 @@ REPORT_JUDGE_PROMPT = """
   }},
   "verdict": "strong | adequate | weak",
   "highlight": "该 draft 的最大亮点（一句话）",
-  "gap": "该 draft 的主要不足（一句话）"
+  "gap": "该 draft 的主要不足（一句话）",
+  "graftSuggestions": ["如果该 draft 未获胜，最值得嫁接到最终报告的具体段落/观点，最多 3 条"]
 }}
 </Output Schema>
 
@@ -774,6 +782,7 @@ REPORT_JUDGE_PROMPT = """
 - structure：结构是否清晰。
 - readability：可读性与表达。
 - sourcing：来源引用质量。
+- graftSuggestions 必须具体，优先指出可直接嫁接的表格、段落、风险提示、定义或对比视角；不要写泛泛的“内容不错”。
 - 只输出 JSON。
 </Rules>
 """
@@ -800,6 +809,7 @@ REPORT_SYNTHESIS_PROMPT = """
 <Rules>
 - 以冠军 draft 为底稿，保留其结构与核心内容。
 - 嫁接落选 draft 的亮点段落（如数据更全、对比更清晰的部分）。
+- Runner-up 中的“必须嫁接建议”优先级高于普通亮点；若证据支持，必须体现在最终报告中。
 - 不要丢失任何来源引用 [n]。
 - 输出语言与用户请求一致。
 - 输出纯 Markdown，不要额外说明。

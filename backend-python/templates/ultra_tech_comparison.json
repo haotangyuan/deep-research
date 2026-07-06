@@ -1,7 +1,25 @@
 {
+  "version": 1,
   "type": "tech_comparison",
+  "mode": "ultra_dynamic",
   "maxRounds": 4,
-  "reviewerCount": 3,
-  "draftAngles": ["comparative", "data-driven", "narrative"],
-  "claimVerification": true
+  "reviewer": {
+    "count": 3,
+    "lenses": ["evidence_sufficiency", "source_authority", "coverage_completeness"],
+    "continueThreshold": 2
+  },
+  "report": {
+    "draftAngles": ["comparative", "data-driven", "narrative"],
+    "judgeEnabled": true,
+    "claimVerification": true
+  },
+  "intervention": {
+    "enabled": true,
+    "applyMode": "next_round_planner_bias"
+  },
+  "budget": {
+    "maxConductCount": 6,
+    "maxSearchCount": 4,
+    "maxConcurrentUnits": 3
+  }
 }
