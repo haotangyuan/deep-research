@@ -1,0 +1,7 @@
+{
+  "type": "fact_lookup",
+  "maxRounds": 1,
+  "reviewerCount": 2,
+  "draftAngles": ["data-driven"],
+  "claimVerification": false
+}

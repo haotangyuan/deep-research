@@ -1,0 +1,7 @@
+{
+  "type": "general",
+  "maxRounds": 5,
+  "reviewerCount": 3,
+  "draftAngles": ["data-driven", "narrative", "comparative"],
+  "claimVerification": true
+}

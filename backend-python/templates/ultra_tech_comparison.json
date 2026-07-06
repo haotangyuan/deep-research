@@ -1,0 +1,7 @@
+{
+  "type": "tech_comparison",
+  "maxRounds": 4,
+  "reviewerCount": 3,
+  "draftAngles": ["comparative", "data-driven", "narrative"],
+  "claimVerification": true
+}

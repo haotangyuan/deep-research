@@ -1,0 +1,7 @@
+{
+  "type": "trend_forecast",
+  "maxRounds": 4,
+  "reviewerCount": 3,
+  "draftAngles": ["narrative", "data-driven", "comparative"],
+  "claimVerification": true
+}

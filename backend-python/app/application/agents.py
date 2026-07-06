@@ -168,6 +168,26 @@ class ScopeAgent:
             )
             state.research_question = question
             state.research_brief = research_brief
+            # 意图识别：解析研究类型（借鉴点 E，零额外 LLM 调用）
+            research_type = str(question.get("researchType") or "general").strip().lower()
+            try:
+                type_confidence = float(question.get("typeConfidence") or 0.0)
+            except (TypeError, ValueError):
+                type_confidence = 0.0
+            from app.application.workflow_template import RESEARCH_TYPES
+
+            state.research_type = research_type if research_type in RESEARCH_TYPES else "general"
+            state.research_type_confidence = type_confidence
+            await event_publisher.publish_event(
+                state.research_id,
+                EventType.AGENT_RUNTIME,
+                f"意图识别: {state.research_type}（置信度 {type_confidence:.2f}）",
+                json.dumps(
+                    {"kind": "intent_recognition", "researchType": state.research_type, "confidence": type_confidence},
+                    ensure_ascii=False,
+                ),
+                state.current_scope_event_id,
+            )
         except Exception:
             state.status = WorkflowStatus.FAILED
 
@@ -932,8 +952,11 @@ class ReportAgent:
                 )
                 state.report = self._fallback_report(state, exc)
                 complete_title = "研究报告已完成（降级）"
-        # 声明交叉验证（借鉴点 A2，仅 ULTRA 动态工作流）
-        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
+        # 声明交叉验证（借鉴点 A2），claimVerification 从编排模板读
+        claim_verification = True
+        if isinstance(state.workflow_template, dict):
+            claim_verification = bool(state.workflow_template.get("claimVerification", True))
+        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC and claim_verification:
             try:
                 state.report = await self.verify_report_claims(state, state.report)
             except Exception as exc:
@@ -946,16 +969,36 @@ class ReportAgent:
         await event_publisher.publish_message(state.research_id, "assistant", state.report)
         return state.report
 
+    @staticmethod
+    def _angles_for_state(state: DeepResearchState) -> list[dict]:
+        """从编排模板读取起草角度，fallback 到默认全部角度。"""
+        angle_keys = None
+        if isinstance(state.workflow_template, dict):
+            angle_keys = state.workflow_template.get("draftAngles")
+        if angle_keys:
+            key_set = set(angle_keys)
+            order = {k: i for i, k in enumerate(angle_keys)}
+            angles = sorted(
+                (a for a in REPORT_DRAFT_ANGLES if a["key"] in key_set),
+                key=lambda a: order.get(a["key"], 999),
+            )
+            if angles:
+                return angles
+        return list(REPORT_DRAFT_ANGLES)
+
     async def _draft_judge_synthesize(self, state: DeepResearchState) -> str:
         """多角度起草 + 评委打分 + 融合（借鉴 CC judge panel）。"""
         findings = self._bounded_findings(state.supervisor_notes)
         quality_context = self._quality_context_text(state.report_quality_context)
 
-        # 阶段1：3 角度并行起草
+        # 角度从编排模板读（借鉴点 E），fallback 到全部角度
+        angles = self._angles_for_state(state)
+
+        # 阶段1：多角度并行起草
         drafts = await asyncio.gather(
-            *(self._draft_by_angle(state, angle, findings, quality_context) for angle in REPORT_DRAFT_ANGLES)
+            *(self._draft_by_angle(state, angle, findings, quality_context) for angle in angles)
         )
-        valid = [(a, d) for a, d in zip(REPORT_DRAFT_ANGLES, drafts) if d]
+        valid = [(a, d) for a, d in zip(angles, drafts) if d]
         if not valid:
             raise RuntimeError("all draft angles failed")
         if len(valid) == 1:

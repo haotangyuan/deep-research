@@ -70,6 +70,9 @@ class DeepResearchState(BaseModel):
     clarify_with_user_schema: dict[str, Any] | None = None
     research_question: dict[str, Any] | None = None
     research_brief: str | None = None
+    research_type: str | None = None
+    research_type_confidence: float = 0.0
+    workflow_template: dict[str, Any] | None = None
 
     budget: BudgetSnapshot
     budget_name: str
@@ -147,6 +150,9 @@ class DeepResearchState(BaseModel):
             report_quality_context=self.report_quality_context,
             trace_metadata_model=self.trace_metadata_model,
             research_brief=self.research_brief,
+            research_type=self.research_type,
+            research_type_confidence=self.research_type_confidence,
+            workflow_template=self.workflow_template,
             budget=self.budget,
             budget_name=self.budget_name,
             current_supervisor_event_id=self.current_supervisor_event_id,

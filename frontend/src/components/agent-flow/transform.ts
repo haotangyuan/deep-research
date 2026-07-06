@@ -102,7 +102,7 @@ function eventKind(event: WorkflowEvent): AgentFlowNodeKind {
   if (type === 'AGENT_RUNTIME') {
     const kind = event.runtimeMetadata?.kind || '';
     if (['team_task', 'team_lifecycle'].includes(kind)) return 'subagent';
-    if (['adversarial_reviewer', 'claim_verification', 'report_judge'].includes(kind)) return 'decision';
+    if (['adversarial_reviewer', 'claim_verification', 'report_judge', 'intent_recognition', 'workflow_template'].includes(kind)) return 'decision';
     if (['report_draft', 'report_synthesize'].includes(kind)) return 'artifact';
     return 'tool';
   }
@@ -206,6 +206,22 @@ function groupForEvent(event: WorkflowEvent, ownerId: string) {
         title: '报告融合',
         subtitle: '冠军 + 嫁接落选亮点',
         kind: 'artifact' as AgentFlowNodeKind,
+      };
+    }
+    if (kind === 'intent_recognition') {
+      return {
+        id: 'agent-scope:intent',
+        title: '意图识别',
+        subtitle: '研究类型判定',
+        kind: 'decision' as AgentFlowNodeKind,
+      };
+    }
+    if (kind === 'workflow_template') {
+      return {
+        id: 'agent-supervisor:template',
+        title: '编排模板',
+        subtitle: '按类型选模板',
+        kind: 'decision' as AgentFlowNodeKind,
       };
     }
     const isTask = ['team_task', 'team_lifecycle'].includes(kind);

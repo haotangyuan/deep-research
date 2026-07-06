@@ -154,9 +154,23 @@ TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT = """
 输出严格的 JSON，不含 Markdown 代码块：
 
 {{
-  "researchBrief": "完整的研究简报文本"
+  "researchBrief": "完整的研究简报文本",
+  "researchType": "tech_comparison | market_analysis | academic_review | fact_lookup | trend_forecast | general",
+  "typeConfidence": 0.0
 }}
 </Output Schema>
+
+<Research Type Rules>
+根据用户需求判断研究类型（用于动态工作流编排模板选择）：
+- tech_comparison：技术选型/对比（如"X 与 Y 的区别"、"选哪个"）
+- market_analysis：市场/行业分析（如"XX 市场规模"、"XX 行业现状"）
+- academic_review：学术综述（如"XX 领域研究进展"、"XX 理论综述"）
+- fact_lookup：事实查询/定义（如"XX 是什么"、"XX 的定义"）
+- trend_forecast：趋势预测（如"XX 未来趋势"、"XX 发展前景"）
+- general：通用/不确定
+
+typeConfidence 为 0-1 的浮点数，表示对该类型判断的置信度。不确定时用 general 并给较低置信度。
+</Research Type Rules>
 
 今天是 {date}。
 注意：请直接使用此日期作为当前日期，不要向用户询问当前年份或日期。

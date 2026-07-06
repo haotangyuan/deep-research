@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     budget_ultra_max_search_count: int = Field(4, alias="BUDGET_ULTRA_MAX_SEARCH_COUNT")
     budget_ultra_max_concurrent_units: int = Field(3, alias="BUDGET_ULTRA_MAX_CONCURRENT_UNITS")
     research_ultra_dynamic_max_rounds: int = Field(5, alias="RESEARCH_ULTRA_DYNAMIC_MAX_ROUNDS")
+    research_ultra_template_dir: str = Field(str(BACKEND_ROOT / "templates"), alias="RESEARCH_ULTRA_TEMPLATE_DIR")
 
     def sqlalchemy_url(self) -> str:
         if self.db_url.startswith("jdbc:mysql://"):

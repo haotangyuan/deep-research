@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import timedelta
 
@@ -482,6 +483,20 @@ class AgentPipeline:
 
     async def _execute_ultra_dynamic_phase_and_3(self, state: DeepResearchState) -> None:
         research_id = state.research_id
+        # 意图识别 + 模板选择（借鉴点 E）：scope 后按 researchType 选模板
+        if not state.workflow_template:
+            from app.application.workflow_template import select_template
+
+            template = select_template(state.research_type, state.research_type_confidence)
+            state.workflow_template = template
+            state.dynamic_max_rounds = int(template.get("maxRounds", state.dynamic_max_rounds))
+            await event_publisher.publish_event(
+                research_id,
+                EventType.AGENT_RUNTIME,
+                f"编排模板: {template.get('type', 'general')}（最大 {state.dynamic_max_rounds} 轮）",
+                json.dumps({"kind": "workflow_template", "template": template}, ensure_ascii=False),
+                state.current_supervisor_event_id,
+            )
         while True:
             if await is_cancelled(research_id):
                 state.status = WorkflowStatus.CANCELLED

@@ -141,7 +141,7 @@ def collect_evidence_entries(
                     source_title=src.title,
                     source_type=src.type or classify_source_type(url),
                     strength_score=src.strength,
-                    section_hint=src.section_hint or result.title,
+                    section_hint=truncate(src.section_hint or result.title, 256) or None,
                     snippet=truncate(src.snippet or "", 500) or None,
                 ),
             )
@@ -161,7 +161,7 @@ def collect_evidence_entries(
                     source_title=item.title,
                     source_type=classify_source_type(url),
                     strength_score=_format_strength(item.score),
-                    section_hint=result.title,
+                    section_hint=truncate(result.title, 256) or None,
                     snippet=truncate(item.content or item.raw_content or "", 500) or None,
                 ),
             )
@@ -479,7 +479,12 @@ class UltraDynamicRoundCoordinator:
             )
             return vote
 
-        votes = await asyncio.gather(*(run_reviewer(lens) for lens in REVIEWER_LENSES))
+        # reviewer 数量从编排模板读（借鉴点 E），fallback 到全部 lens
+        reviewer_count = 3
+        if isinstance(state.workflow_template, dict):
+            reviewer_count = int(state.workflow_template.get("reviewerCount", 3))
+        lenses = REVIEWER_LENSES[: max(1, min(reviewer_count, len(REVIEWER_LENSES)))]
+        votes = await asyncio.gather(*(run_reviewer(lens) for lens in lenses))
 
         # 聚合：≥2 票 continue 才 continue，否则 report（默认 refuted 倾向）
         continue_count = sum(1 for v in votes if v.get("nextAction") == "continue")
