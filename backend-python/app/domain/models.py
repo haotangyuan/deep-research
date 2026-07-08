@@ -163,3 +163,37 @@ class ResearchEvidenceLedger(Base):
     section_hint: Mapped[str | None] = mapped_column(String(256))
     snippet: Mapped[str | None] = mapped_column(Text)
     create_time: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ResearchContextNode(Base):
+    __tablename__ = "research_context_node"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    research_id: Mapped[str] = mapped_column(String(32), index=True)
+    path: Mapped[str] = mapped_column(String(512), unique=True, index=True)
+    node_type: Mapped[str] = mapped_column(String(64), index=True)
+    level: Mapped[str] = mapped_column(String(16), index=True)
+    title: Mapped[str | None] = mapped_column(String(512))
+    content: Mapped[str | None] = mapped_column(Text)
+    content_ref: Mapped[str | None] = mapped_column(String(512))
+    parent_path: Mapped[str | None] = mapped_column(String(512), index=True)
+    branch_index: Mapped[int | None] = mapped_column(Integer, index=True)
+    round_no: Mapped[int | None] = mapped_column(Integer, index=True)
+    token_estimate: Mapped[int | None] = mapped_column(Integer)
+    char_count: Mapped[int | None] = mapped_column(Integer)
+    metadata_json: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    create_time: Mapped[datetime | None] = mapped_column(DateTime)
+    update_time: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class ResearchContextEdge(Base):
+    __tablename__ = "research_context_edge"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    research_id: Mapped[str] = mapped_column(String(32), index=True)
+    from_path: Mapped[str] = mapped_column(String(512), index=True)
+    to_path: Mapped[str] = mapped_column(String(512), index=True)
+    relation_type: Mapped[str] = mapped_column(String(64), index=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text)
+    create_time: Mapped[datetime | None] = mapped_column(DateTime)

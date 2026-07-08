@@ -50,12 +50,16 @@ from app.application.ultra_dynamic import (
     render_report_quality_markdown,
 )
 from app.domain.runtime import ResearchAgentRequest, ResearchMemory, ResearchMessage, ResearchToolCall, render_messages
+from app.domain.context import BranchEvidencePackage, EvidenceItem
 from app.domain.state import DeepResearchState, ResearcherSource, TavilySearchResult
 from app.infrastructure.tavily import tavily_client
 from app.core.timeutil import today_str
+from app.application.context_writer import branch_index_from_task_id, write_branch_package_context, write_search_context
+from app.application.report_context import ReportContextBuilder, has_selected_context, render_report_context
 from app.application.tools import RESEARCHER_STAGE_TOOLS, execute_simple_tool
 from app.application.research_team import research_team
 from app.application.workflow_template import claim_verification_enabled, draft_angles, report_judge_enabled
+from app.infrastructure.context_store import ResearchContextStore
 
 
 logger = logging.getLogger(__name__)
@@ -617,6 +621,16 @@ class ResearcherAgent:
         for url, item in search_state.search_results.items():
             state.search_results.setdefault(url, item)
         state.search_notes.extend(search_state.search_notes)
+        try:
+            await write_search_context(
+                store=ResearchContextStore(),
+                research_id=state.research_id,
+                branch_index=branch_index_from_task_id(state.agent_task_id),
+                round_no=state.dynamic_round_no,
+                search_results=list(search_state.search_results.values()),
+            )
+        except Exception:
+            logger.exception("write search context failed research_id=%s query=%s", state.research_id, query)
         return result
 
     async def _compress_research(self, memory: ResearchMemory, state: DeepResearchState) -> str:
@@ -633,7 +647,9 @@ class ResearcherAgent:
                 ResearchAgentRequest.text_only("ResearchCompressorAgent", None, messages, state.trace_context()),
             )
             state.add_token_usage(response.token_usage)
-            findings, sources = self._parse_compressed_research(response.ai_message.text, state)
+            branch_index = branch_index_from_task_id(state.agent_task_id)
+            findings, sources, package = self._parse_evidence_package(response.ai_message.text, state, branch_index)
+            state.branch_evidence_package = package
         except Exception as exc:
             logger.exception(
                 "research compression failed research_id=%s topic=%s model_id=%s budget=%s",
@@ -651,8 +667,28 @@ class ResearcherAgent:
             )
             findings = self._fallback_compressed_research(state, exc)
             sources = self._fallback_researcher_sources(state)
+            state.branch_evidence_package = BranchEvidencePackage(
+                branch_index=branch_index_from_task_id(state.agent_task_id),
+                task_title=state.research_topic or "",
+                research_topic=state.research_topic or "",
+                branch_summary=truncate(findings, 1200),
+                evidence_items=[],
+                source_paths=[],
+                gaps=[f"evidence extraction failed: {_safe_error_summary(exc)}"],
+                conflicts=[],
+            )
         state.compressed_research = findings
         state.researcher_sources = sources
+        if state.branch_evidence_package is not None:
+            try:
+                await write_branch_package_context(
+                    store=ResearchContextStore(),
+                    research_id=state.research_id,
+                    round_no=state.dynamic_round_no,
+                    package=state.branch_evidence_package,
+                )
+            except Exception:
+                logger.exception("write branch evidence context failed research_id=%s", state.research_id)
         preview = findings[: min(200, len(findings))] + "..."
         await event_publisher.publish_event(
             state.research_id,
@@ -662,6 +698,60 @@ class ResearcherAgent:
             state.current_research_event_id,
         )
         return findings
+
+    def _parse_evidence_package(
+        self,
+        text: str,
+        state: DeepResearchState,
+        branch_index: int,
+    ) -> tuple[str, list[ResearcherSource], BranchEvidencePackage]:
+        data = extract_json(text)
+        if not isinstance(data, dict):
+            findings, sources = self._parse_compressed_research(text, state)
+            package = BranchEvidencePackage(
+                branch_index=branch_index,
+                task_title=state.research_topic or "",
+                research_topic=state.research_topic or "",
+                branch_summary=truncate(findings, 1200),
+                evidence_items=[],
+                source_paths=[],
+                gaps=[],
+                conflicts=[],
+            )
+            return findings, sources, package
+
+        findings = str(data.get("findings") or data.get("branchSummary") or "")
+        _, sources = self._parse_compressed_research(
+            json.dumps({"findings": findings, "sources": data.get("sources") or []}, ensure_ascii=False),
+            state,
+        )
+        evidence_items: list[EvidenceItem] = []
+        for item in data.get("evidenceItems") or []:
+            if not isinstance(item, dict):
+                continue
+            evidence_items.append(
+                EvidenceItem(
+                    claim=str(item.get("claim") or ""),
+                    evidence_text=str(item.get("evidenceText") or item.get("evidence_text") or ""),
+                    source_url=item.get("sourceUrl") or item.get("source_url"),
+                    source_title=item.get("sourceTitle") or item.get("source_title"),
+                    source_type=str(item.get("sourceType") or item.get("source_type") or "other"),
+                    strength=str(item.get("strength") or "medium"),
+                    section_hint=item.get("sectionHint") or item.get("section_hint"),
+                    confidence=float(item.get("confidence") or 0.5),
+                )
+            )
+        package = BranchEvidencePackage(
+            branch_index=branch_index,
+            task_title=state.research_topic or "",
+            research_topic=state.research_topic or "",
+            branch_summary=str(data.get("branchSummary") or findings),
+            evidence_items=evidence_items,
+            source_paths=[],
+            gaps=[str(item) for item in data.get("gaps") or []],
+            conflicts=[str(item) for item in data.get("conflicts") or []],
+        )
+        return findings, sources, package
 
     def _parse_compressed_research(self, text: str, state: DeepResearchState) -> tuple[str, list[ResearcherSource]]:
         """解析 Researcher 结构化 JSON 输出，返回 (findings, sources)。解析失败时 fallback。"""
@@ -952,10 +1042,11 @@ class ReportAgent:
                 state.report = self._fallback_report(state, exc)
                 complete_title = "研究报告已完成（降级）"
         else:
+            findings_text = await self._report_findings_text(state)
             prompt = REPORT_AGENT_PROMPT.format(
                 research_brief=state.research_brief or "",
                 date=today_str(),
-                findings=self._bounded_findings(state.supervisor_notes),
+                findings=findings_text,
                 quality_context=self._quality_context_text(state.report_quality_context),
             )
             try:
@@ -1016,7 +1107,7 @@ class ReportAgent:
 
     async def _draft_judge_synthesize(self, state: DeepResearchState) -> str:
         """多角度起草 + 评委打分 + 融合（借鉴 CC judge panel）。"""
-        findings = self._bounded_findings(state.supervisor_notes)
+        findings = await self._report_findings_text(state)
         quality_context = self._quality_context_text(state.report_quality_context)
 
         # 角度从编排模板读（借鉴点 E），fallback 到全部角度
@@ -1047,6 +1138,33 @@ class ReportAgent:
 
         # 阶段3：融合（冠军为底 + 嫁接落选亮点）
         return await self._synthesize_report(state, champion_draft, champion_score, runner_ups)
+
+    async def _report_findings_text(self, state: DeepResearchState) -> str:
+        try:
+            report_context = await ReportContextBuilder().build(
+                research_id=state.research_id,
+                research_brief=state.research_brief or "",
+            )
+            await event_publisher.publish_event(
+                state.research_id,
+                EventType.AGENT_RUNTIME,
+                "报告上下文已装配",
+                json.dumps(
+                    {
+                        "kind": "report_context",
+                        "sections": {key: len(value) for key, value in report_context.section_contexts.items()},
+                        "dropped": len(report_context.dropped),
+                        "estimatedTokens": report_context.total_estimated_tokens,
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            rendered = render_report_context(report_context)
+            if has_selected_context(report_context):
+                return rendered
+        except Exception:
+            logger.exception("build report context failed research_id=%s", state.research_id)
+        return self._bounded_findings(state.supervisor_notes)
 
     async def _draft_by_angle(
         self,
