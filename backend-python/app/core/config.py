@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     app_time_zone: str = Field("Asia/Shanghai", alias="APP_TIME_ZONE")
     research_agent_framework: str = Field("agentscope-python", alias="RESEARCH_AGENT_FRAMEWORK")
     llm_timeout: int = Field(300, alias="LLM_TIMEOUT")
+    llm_max_concurrency: int = Field(1, alias="LLM_MAX_CONCURRENCY")
+    llm_retry_max_attempts: int = Field(3, alias="LLM_RETRY_MAX_ATTEMPTS")
+    llm_retry_initial_delay_seconds: float = Field(2.0, alias="LLM_RETRY_INITIAL_DELAY_SECONDS")
+    llm_retry_max_delay_seconds: float = Field(20.0, alias="LLM_RETRY_MAX_DELAY_SECONDS")
 
     research_async_max_pool_size: int = Field(10, alias="RESEARCH_ASYNC_MAX_POOL_SIZE")
     research_async_queue_capacity: int = Field(50, alias="RESEARCH_ASYNC_QUEUE_CAPACITY")

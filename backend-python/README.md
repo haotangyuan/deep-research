@@ -10,6 +10,8 @@ app/
 │   ├── agents.py           # Scope/Supervisor/Researcher/Search/Report
 │   ├── pipeline.py         # 队列和研究工作流
 │   ├── research_team.py    # AgentScope Leader/Worker 团队
+│   ├── report_team.py      # 章节报告 Agent、L2 下钻、邮箱通信与合并
+│   ├── report_context.py   # 兼容链路的预算化报告上下文
 │   ├── services.py         # 用户、模型、研究服务
 │   ├── prompts.py          # Agent 提示词
 │   └── tools.py            # 工具契约
@@ -32,6 +34,28 @@ app/
 - Middleware、原生 tracing 与 `AGENT_RUNTIME` 事件摘要
 
 Checkpoint 保存业务状态、AgentScope TaskContext 和有界运行时摘要；网页摘要 AgentState 不写入 checkpoint，避免复制网页正文导致 Redis 和 Token 膨胀。项目只使用 AgentScope 公共 API，不依赖 `agentscope.app._*` 私有 Team 实现。
+
+## 章节报告团队
+
+Ultra 工作流模板默认启用 `report.sectionTeamEnabled=true`。`ReportSectionTeam` 的执行顺序为：
+
+```text
+ReportSectionPlanner
+  ↓
+章节 Agent 并行执行 L0 召回 → L1 精排 → L2 定向下钻 → 初稿
+  ↓
+共享 claim + evidence_request 持久化邮箱
+  ↓
+ReportConsistencyAgent
+  ↓
+章节 Agent 并行修订
+  ↓
+ReportAgent:merge
+```
+
+中间产物写入 `research://{research_id}/report/workspace/`，包括章节规划、证据快照、L2 路径、共享声明、邮箱消息、初稿、修订稿和最终报告。团队失败时 `ReportAgent` 会回退原多角度起草流程。
+
+完整数据契约、通信协议与边界见 [`docs/report-section-agent-team.md`](../docs/report-section-agent-team.md)。
 
 ## 环境
 
@@ -94,6 +118,11 @@ conda run -n deep-research-py uvicorn app.main:app --host 127.0.0.1 --port 8080
 | `RESEARCH_SEARCH_SUMMARY_CACHE_ENABLED` | `true` | 网页摘要缓存 |
 | `TAVILY_CACHE_ENABLED` | `true` | 搜索查询缓存 |
 | `RESEARCH_REPORT_FINDINGS_MAX_CHARS` | `20000` | 报告材料输入上限 |
+| `RESEARCH_CONTEXT_L0_MAX_CHARS` | `400` | 单来源 L0 摘要上限 |
+| `RESEARCH_CONTEXT_L1_MAX_CHARS` | `2500` | 单来源 L1 概览上限 |
+| `RESEARCH_CONTEXT_L2_MAX_CHARS` | `12000` | 单来源 L2 持久化上限 |
+| `RESEARCH_CONTEXT_RAW_EXCERPT_MAX_CHARS` | `1200` | 章节 Agent 单次读取单来源 L2 摘录上限 |
+| `LLM_MAX_CONCURRENCY` | `1` | 同一模型账户的实际并发上限 |
 
 `AgentScopeResearchTeam` 使用原生 TaskContext 记录任务，并通过 `asyncio.gather` 和预算中的 `maxConcurrentUnits` 并发执行隔离 Worker。搜索与摘要层实现 TTL 缓存、in-flight 合并、每网页独立 AgentState、并发摘要和超时降级。
 
@@ -113,6 +142,10 @@ Span 层级为项目的 `workflow -> stage` 加 AgentScope `invoke_agent -> chat
 ```bash
 conda run -n deep-research-py python -m compileall -q app tests
 conda run -n deep-research-py pytest -q
+conda run -n deep-research-py pytest -q \
+  tests/test_report_team.py \
+  tests/test_report_context.py \
+  tests/test_ultra_dynamic_online.py
 conda run -n deep-research-py python tests/api_feature_smoke.py
 PYTHONPATH=. conda run -n deep-research-py python tests/observability_smoke.py
 PYTHONUNBUFFERED=1 conda run -n deep-research-py python tests/live_hybrid_workflow_smoke.py

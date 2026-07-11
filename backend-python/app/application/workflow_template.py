@@ -52,6 +52,7 @@ class ReportTemplate(BaseModel):
     draftAngles: list[str] = Field(default_factory=lambda: list(DEFAULT_DRAFT_ANGLES), min_length=1)
     judgeEnabled: bool = True
     claimVerification: bool = True
+    sectionTeamEnabled: bool = False
 
     @field_validator("draftAngles")
     @classmethod
@@ -122,6 +123,7 @@ def normalize_template(template: dict[str, Any]) -> dict[str, Any]:
     report.setdefault("draftAngles", list(normalized.get("draftAngles") or DEFAULT_DRAFT_ANGLES))
     report.setdefault("judgeEnabled", True)
     report.setdefault("claimVerification", bool(normalized.get("claimVerification", True)))
+    report.setdefault("sectionTeamEnabled", bool(normalized.get("sectionTeamEnabled", False)))
     normalized["report"] = report
 
     budget = dict(normalized.get("budget") or {})
@@ -190,6 +192,15 @@ def report_judge_enabled(template: dict[str, Any] | None) -> bool:
     if isinstance(report, dict) and "judgeEnabled" in report:
         return bool(report.get("judgeEnabled"))
     return True
+
+
+def report_section_team_enabled(template: dict[str, Any] | None) -> bool:
+    report = (template or {}).get("report") if isinstance(template, dict) else None
+    if isinstance(report, dict) and "sectionTeamEnabled" in report:
+        return bool(report.get("sectionTeamEnabled"))
+    if isinstance(template, dict) and "sectionTeamEnabled" in template:
+        return bool(template.get("sectionTeamEnabled"))
+    return False
 
 
 def template_budget(template: dict[str, Any] | None) -> dict[str, int]:

@@ -24,6 +24,12 @@ class ContextNodeType(StrEnum):
     SOURCE_RAW = "source_raw"
     EVIDENCE = "evidence"
     REPORT_CONTEXT = "report_context"
+    REPORT_PLAN = "report_plan"
+    REPORT_SECTION_EVIDENCE = "report_section_evidence"
+    REPORT_SECTION_DRAFT = "report_section_draft"
+    REPORT_SECTION_REVISION = "report_section_revision"
+    REPORT_SHARED_CLAIM = "report_shared_claim"
+    REPORT_AGENT_MESSAGE = "report_agent_message"
 
 
 class ResearchContextPath(BaseModel):

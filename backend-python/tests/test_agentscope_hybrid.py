@@ -12,11 +12,14 @@ from agentscope.middleware import TracingMiddleware
 from app.application.research_team import AgentScopeResearchTeam
 from app.application.pipeline import ResearchTaskQueue
 from app.domain.dto import WorkflowEventDTO
+from app.domain.models import Model
+from app.domain.runtime import ResearchAgentRequest, ResearchChatResponse, ResearchMessage
 from app.infrastructure.agentscope_runtime import (
     AgentScopeRuntimeSession,
     ResearchRuntimeMiddleware,
     RuntimeCallMetrics,
 )
+from app.infrastructure.llm import AgentScopeChatClient
 
 
 def test_agentscope_version_is_locked() -> None:
@@ -191,3 +194,132 @@ async def test_research_queue_cancels_only_the_active_pipeline_task(monkeypatch)
     await asyncio.wait_for(cancelled.wait(), timeout=1)
     assert queue.cancel("not-active") is None
     await queue.stop()
+
+
+@pytest.mark.asyncio
+async def test_agentscope_chat_client_retries_transient_concurrency_limit(monkeypatch) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+    published: list[dict] = []
+
+    client = AgentScopeChatClient.__new__(AgentScopeChatClient)
+    client.research_id = "research-1"
+    client.model_name = "test-model"
+    client.framework = "agentscope-python"
+    client.timeout = 300
+    client.retry_max_attempts = 3
+    client.retry_initial_delay = 2.0
+    client.retry_max_delay = 20.0
+    client._model_account_semaphore = asyncio.Semaphore(1)
+    client.runtime = AgentScopeRuntimeSession("research-1")
+
+    class FakeEntry:
+        metrics = SimpleNamespace(copy=lambda: SimpleNamespace())
+        agent = SimpleNamespace()
+
+    async def publish_runtime_summary(summary):
+        published.append(summary)
+
+    monkeypatch.setattr(client, "_runtime_entry", lambda _request: ("runtime-key", FakeEntry()))
+    monkeypatch.setattr(client, "_agent_timeout", lambda _request: 30)
+    monkeypatch.setattr(client, "_publish_runtime_summary", publish_runtime_summary)
+    monkeypatch.setattr(client.runtime, "call_summary", lambda *_args, **_kwargs: {"status": "completed"})
+
+    async def fake_run_agent(_request, _agent):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("APIError: Concurrency limit exceeded for account, please retry later")
+        return ResearchChatResponse(ai_message=ResearchMessage.assistant("ok"))
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(client, "_run_agent", fake_run_agent)
+    monkeypatch.setattr("app.infrastructure.llm.asyncio.sleep", fake_sleep)
+
+    response = await client.run_agent(
+        ResearchAgentRequest.text_only(
+            "ScopeAgent",
+            "",
+            [ResearchMessage.user("hello")],
+            {"llm.retry.initial_delay.seconds": 0.01},
+        ),
+    )
+
+    assert response.ai_message.text == "ok"
+    assert attempts == 2
+    assert sleeps == [0.01]
+    assert published == [{"status": "completed"}]
+
+
+@pytest.mark.asyncio
+async def test_agentscope_chat_client_limits_concurrent_calls_for_same_model_account(monkeypatch) -> None:
+    active = 0
+    peak = 0
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    settings = SimpleNamespace(
+        llm_timeout=300,
+        llm_max_concurrency=1,
+        llm_retry_max_attempts=3,
+        llm_retry_initial_delay_seconds=2.0,
+        llm_retry_max_delay_seconds=20.0,
+    )
+    monkeypatch.setattr("app.infrastructure.llm.get_settings", lambda: settings)
+
+    class FakeOpenAIChatModel:
+        class Parameters:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    monkeypatch.setattr("app.infrastructure.llm.OpenAIChatModel", FakeOpenAIChatModel)
+    monkeypatch.setattr("app.infrastructure.llm.OpenAICredential", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    model = Model(
+        id="model-1",
+        type="chat",
+        user_id=1,
+        name="test",
+        model="test-model",
+        base_url="https://llm.example.test/v1",
+        api_key="same-key",
+        create_time=None,
+        update_time=None,
+    )
+    first = AgentScopeChatClient("research-1", model)
+    second = AgentScopeChatClient("research-2", model)
+
+    async def publish_runtime_summary(_summary):
+        return None
+
+    for client in (first, second):
+        monkeypatch.setattr(client, "_runtime_entry", lambda _request: ("runtime-key", SimpleNamespace(metrics={}, agent=SimpleNamespace())))
+        monkeypatch.setattr(client, "_publish_runtime_summary", publish_runtime_summary)
+        monkeypatch.setattr(client.runtime, "call_summary", lambda *_args, **_kwargs: {"status": "completed"})
+
+    async def fake_run_agent(self, _request, _agent):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        started.set()
+        await release.wait()
+        active -= 1
+        return ResearchChatResponse(ai_message=ResearchMessage.assistant("ok"))
+
+    monkeypatch.setattr(AgentScopeChatClient, "_run_agent", fake_run_agent)
+
+    request = ResearchAgentRequest.text_only("ScopeAgent", "", [ResearchMessage.user("hello")])
+    first_task = asyncio.create_task(first.run_agent(request))
+    await asyncio.wait_for(started.wait(), timeout=1)
+    second_task = asyncio.create_task(second.run_agent(request))
+    await asyncio.sleep(0)
+
+    assert peak == 1
+    release.set()
+    await asyncio.gather(first_task, second_task)
+    assert peak == 1

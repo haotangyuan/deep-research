@@ -117,6 +117,23 @@ class ResearchContextStore:
             result = await session.scalars(stmt)
             return list(result)
 
+    async def list_nodes_by_prefix(
+        self,
+        research_id: str,
+        path_prefix: str,
+        node_types: list[str] | None = None,
+    ) -> list[ResearchContextNode]:
+        async with SessionLocal() as session:
+            stmt = select(ResearchContextNode).where(
+                ResearchContextNode.research_id == research_id,
+                ResearchContextNode.path.startswith(path_prefix),
+                ResearchContextNode.status == "ready",
+            )
+            if node_types:
+                stmt = stmt.where(ResearchContextNode.node_type.in_(node_types))
+            result = await session.scalars(stmt)
+            return list(result)
+
     async def read_raw_for_parent(self, research_id: str, parent_path: str, max_chars: int) -> str | None:
         async with SessionLocal() as session:
             node = await session.scalar(

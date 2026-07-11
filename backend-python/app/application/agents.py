@@ -56,9 +56,15 @@ from app.infrastructure.tavily import tavily_client
 from app.core.timeutil import today_str
 from app.application.context_writer import branch_index_from_task_id, write_branch_package_context, write_search_context
 from app.application.report_context import ReportContextBuilder, has_selected_context, render_report_context
+from app.application.report_team import report_section_team
 from app.application.tools import RESEARCHER_STAGE_TOOLS, execute_simple_tool
 from app.application.research_team import research_team
-from app.application.workflow_template import claim_verification_enabled, draft_angles, report_judge_enabled
+from app.application.workflow_template import (
+    claim_verification_enabled,
+    draft_angles,
+    report_judge_enabled,
+    report_section_team_enabled,
+)
 from app.infrastructure.context_store import ResearchContextStore
 
 
@@ -1021,8 +1027,31 @@ class ReportAgent:
             "正在生成研究报告...",
             None,
         )
-        # ULTRA 动态工作流走多角度起草 + 评委 + 融合（借鉴点 C）；其他模式单次生成
-        if state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
+        section_team_completed = False
+        if report_section_team_enabled(state.workflow_template):
+            try:
+                state.report = await report_section_team.run(
+                    state,
+                    self._quality_context_text(state.report_quality_context),
+                )
+                complete_title = "研究报告已完成"
+                section_team_completed = True
+            except Exception as exc:
+                logger.exception(
+                    "section report team failed research_id=%s model_id=%s budget=%s",
+                    state.research_id,
+                    state.trace_metadata_model.model_id,
+                    state.budget_name,
+                )
+                await event_publisher.publish_event(
+                    state.research_id,
+                    EventType.ERROR,
+                    "章节报告团队执行失败，回退到原报告流程",
+                    summarize(f"{exc.__class__.__name__}: {exc}"),
+                )
+
+        # 未启用章节团队或团队降级时，保留原有多角度/单次生成协议。
+        if not section_team_completed and state.workflow_mode == WorkflowMode.ULTRA_DYNAMIC:
             try:
                 state.report = await self._draft_judge_synthesize(state)
                 complete_title = "研究报告已完成"
@@ -1041,7 +1070,7 @@ class ReportAgent:
                 )
                 state.report = self._fallback_report(state, exc)
                 complete_title = "研究报告已完成（降级）"
-        else:
+        elif not section_team_completed:
             findings_text = await self._report_findings_text(state)
             prompt = REPORT_AGENT_PROMPT.format(
                 research_brief=state.research_brief or "",
