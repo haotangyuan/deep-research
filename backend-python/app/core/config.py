@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     research_search_summary_cache_ttl_minutes: int = Field(60, alias="RESEARCH_SEARCH_SUMMARY_CACHE_TTL_MINUTES")
     research_search_summary_cache_max_entries: int = Field(1024, alias="RESEARCH_SEARCH_SUMMARY_CACHE_MAX_ENTRIES")
     research_report_findings_max_chars: int = Field(20000, alias="RESEARCH_REPORT_FINDINGS_MAX_CHARS")
+    research_context_l0_max_chars: int = Field(400, alias="RESEARCH_CONTEXT_L0_MAX_CHARS")
+    research_context_l1_max_chars: int = Field(2500, alias="RESEARCH_CONTEXT_L1_MAX_CHARS")
+    research_context_l2_max_chars: int = Field(12000, alias="RESEARCH_CONTEXT_L2_MAX_CHARS")
+    research_context_report_max_chars: int = Field(40000, alias="RESEARCH_CONTEXT_REPORT_MAX_CHARS")
+    research_context_section_max_chars: int = Field(8000, alias="RESEARCH_CONTEXT_SECTION_MAX_CHARS")
+    research_context_raw_excerpt_max_chars: int = Field(1200, alias="RESEARCH_CONTEXT_RAW_EXCERPT_MAX_CHARS")
 
     jwt_secret: str = Field("deep-research-jwt-secret-key-must-be-at-least-32-chars", alias="JWT_SECRET")
     jwt_expiration_minutes: int = Field(10080, alias="JWT_EXPIRATION")
@@ -55,6 +61,10 @@ class Settings(BaseSettings):
     app_time_zone: str = Field("Asia/Shanghai", alias="APP_TIME_ZONE")
     research_agent_framework: str = Field("agentscope-python", alias="RESEARCH_AGENT_FRAMEWORK")
     llm_timeout: int = Field(300, alias="LLM_TIMEOUT")
+    llm_max_concurrency: int = Field(1, alias="LLM_MAX_CONCURRENCY")
+    llm_retry_max_attempts: int = Field(3, alias="LLM_RETRY_MAX_ATTEMPTS")
+    llm_retry_initial_delay_seconds: float = Field(2.0, alias="LLM_RETRY_INITIAL_DELAY_SECONDS")
+    llm_retry_max_delay_seconds: float = Field(20.0, alias="LLM_RETRY_MAX_DELAY_SECONDS")
 
     research_async_max_pool_size: int = Field(10, alias="RESEARCH_ASYNC_MAX_POOL_SIZE")
     research_async_queue_capacity: int = Field(50, alias="RESEARCH_ASYNC_QUEUE_CAPACITY")

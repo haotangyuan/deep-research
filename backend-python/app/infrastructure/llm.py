@@ -34,6 +34,10 @@ from app.domain.runtime import (
 )
 
 
+_MODEL_ACCOUNT_SEMAPHORES: dict[str, asyncio.Semaphore] = {}
+_MODEL_ACCOUNT_LIMITS: dict[str, int] = {}
+
+
 class ResearchDynamicTool(ToolBase):
     def __init__(self, spec: ResearchToolSpec, executor) -> None:
         self.name = spec.name
@@ -56,6 +60,15 @@ class ResearchDynamicTool(ToolBase):
 
 
 class AgentScopeChatClient:
+    _TRANSIENT_RETRY_PHRASES = (
+        "concurrency limit exceeded",
+        "rate limit",
+        "too many requests",
+        "temporarily unavailable",
+        "service unavailable",
+        "server overloaded",
+    )
+
     def __init__(self, research_id: str, model_record: Model) -> None:
         settings = get_settings()
         if not model_record or not model_record.id:
@@ -65,6 +78,14 @@ class AgentScopeChatClient:
         self.model_name = model_record.model
         self.framework = "agentscope-python"
         self.timeout = settings.llm_timeout
+        self.retry_max_attempts = max(1, settings.llm_retry_max_attempts)
+        self.retry_initial_delay = max(0.0, settings.llm_retry_initial_delay_seconds)
+        self.retry_max_delay = max(self.retry_initial_delay, settings.llm_retry_max_delay_seconds)
+        self._model_account_key = self._account_key(model_record)
+        self._model_account_semaphore = self._account_semaphore(
+            self._model_account_key,
+            max(1, settings.llm_max_concurrency),
+        )
         self.runtime = AgentScopeRuntimeSession(research_id)
         self.model = OpenAIChatModel(
             credential=credential,
@@ -89,10 +110,7 @@ class AgentScopeChatClient:
             len(request.tool_specifications),
         ) as span:
             try:
-                response = await asyncio.wait_for(
-                    self._run_agent(request, entry.agent),
-                    timeout=self._agent_timeout(request),
-                )
+                response = await self._run_agent_with_transient_retries(request, entry.agent)
             except Exception:
                 summary = self.runtime.call_summary(
                     runtime_key,
@@ -121,6 +139,24 @@ class AgentScopeChatClient:
                 ),
             )
             return response
+
+    async def _run_agent_with_transient_retries(self, request: ResearchAgentRequest, agent: Agent) -> ResearchChatResponse:
+        max_attempts = max(1, self._runtime_int(request, "llm.retry.max_attempts", self.retry_max_attempts))
+        initial_delay = max(0.0, self._runtime_float(request, "llm.retry.initial_delay.seconds", self.retry_initial_delay))
+        max_delay = max(initial_delay, self._runtime_float(request, "llm.retry.max_delay.seconds", self.retry_max_delay))
+        attempt = 0
+        while True:
+            try:
+                async with self._model_account_semaphore:
+                    return await asyncio.wait_for(
+                        self._run_agent(request, agent),
+                        timeout=self._agent_timeout(request),
+                    )
+            except Exception as exc:
+                attempt += 1
+                if attempt >= max_attempts or not self._is_transient_llm_error(exc):
+                    raise
+                await asyncio.sleep(min(max_delay, initial_delay * (2 ** (attempt - 1))))
 
     async def _run_agent(self, request: ResearchAgentRequest, agent: Agent) -> ResearchChatResponse:
         inputs = self._input_messages(request)
@@ -208,6 +244,25 @@ class AgentScopeChatClient:
                 pass
         return float(self.timeout * max(1, request.max_iterations))
 
+    @classmethod
+    def _is_transient_llm_error(cls, exc: Exception) -> bool:
+        message = f"{exc.__class__.__name__}: {exc}".lower()
+        return any(phrase in message for phrase in cls._TRANSIENT_RETRY_PHRASES)
+
+    @staticmethod
+    def _runtime_int(request: ResearchAgentRequest, key: str, default: int) -> int:
+        try:
+            return int(request.runtime_context.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _runtime_float(request: ResearchAgentRequest, key: str, default: float) -> float:
+        try:
+            return float(request.runtime_context.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
     def _toolkit(self, request: ResearchAgentRequest) -> Toolkit | None:
         if not request.tool_specifications:
             return None
@@ -229,6 +284,26 @@ class AgentScopeChatClient:
             if message.role == Role.SYSTEM and message.text:
                 prompts.append(message.text)
         return "\n\n".join(prompts)
+
+    @classmethod
+    def _account_semaphore(cls, key: str, limit: int) -> asyncio.Semaphore:
+        current = _MODEL_ACCOUNT_SEMAPHORES.get(key)
+        if current is None or _MODEL_ACCOUNT_LIMITS.get(key) != limit:
+            current = asyncio.Semaphore(limit)
+            _MODEL_ACCOUNT_SEMAPHORES[key] = current
+            _MODEL_ACCOUNT_LIMITS[key] = limit
+        return current
+
+    @staticmethod
+    def _account_key(model_record: Model) -> str:
+        digest = hashlib.sha1((model_record.api_key or "").encode("utf-8")).hexdigest()[:12]
+        return "|".join(
+            [
+                str(model_record.base_url or ""),
+                str(model_record.model or ""),
+                digest,
+            ],
+        )
 
     @staticmethod
     def _input_messages(request: ResearchAgentRequest) -> list[Msg]:

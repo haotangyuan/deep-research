@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.domain.context import BranchEvidencePackage
 from app.infrastructure.observability import ResearchTraceMetadata
 from app.domain.runtime import ResearchMessage, ResearchTokenUsage
 
@@ -103,6 +104,7 @@ class DeepResearchState(BaseModel):
     researcher_notes: list[str] = Field(default_factory=list)
     compressed_research: str | None = None
     researcher_sources: list[ResearcherSource] = Field(default_factory=list)
+    branch_evidence_package: BranchEvidencePackage | None = None
 
     query: str | None = None
     max_results: int | None = None
@@ -180,6 +182,7 @@ class DeepResearchState(BaseModel):
             search_results={},
             search_notes=[],
             researcher_sources=[],
+            branch_evidence_package=None,
             total_input_tokens=0,
             total_output_tokens=0,
             agent_worker_id=worker_id,
@@ -214,6 +217,7 @@ class DeepResearchState(BaseModel):
             search_results={},
             search_notes=[],
             researcher_sources=[],
+            branch_evidence_package=None,
             total_input_tokens=0,
             total_output_tokens=0,
             agent_worker_id=self.agent_worker_id,

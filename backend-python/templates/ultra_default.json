@@ -11,7 +11,8 @@
   "report": {
     "draftAngles": ["data-driven", "narrative", "comparative"],
     "judgeEnabled": true,
-    "claimVerification": true
+    "claimVerification": true,
+    "sectionTeamEnabled": true
   },
   "intervention": {
     "enabled": true,

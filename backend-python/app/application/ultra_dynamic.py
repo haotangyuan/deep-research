@@ -126,6 +126,27 @@ def collect_evidence_entries(
         if branch_state is None:
             continue
         seen_urls: set[str] = set()
+        if branch_state.branch_evidence_package and branch_state.branch_evidence_package.evidence_items:
+            for item in branch_state.branch_evidence_package.evidence_items:
+                url = (item.source_url or "").strip()
+                if url and url in seen_urls:
+                    continue
+                if url:
+                    seen_urls.add(url)
+                entries.append(
+                    EvidenceLedgerEntry(
+                        research_id=research_id,
+                        round_no=round_no,
+                        task_index=result.index,
+                        task_title=result.title,
+                        source_url=url or None,
+                        source_title=item.source_title,
+                        source_type=item.source_type,
+                        strength_score=item.strength,
+                        section_hint=truncate(item.section_hint or result.title, 256) or None,
+                        snippet=truncate(item.evidence_text or item.claim, 500) or None,
+                    ),
+                )
         # 优先用 Researcher 结构化来源（LLM 判定 type/strength，借鉴点 B）
         for src in branch_state.researcher_sources:
             url = (src.url or "").strip()
