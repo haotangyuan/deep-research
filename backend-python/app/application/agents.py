@@ -40,6 +40,7 @@ from app.application.prompts import (
     TRANSFORM_MESSAGES_INTO_RESEARCH_TOPIC_PROMPT,
     ULTRA_CLAIM_VERIFY_PROMPT,
     REPORT_DRAFT_ANGLE_PROMPT,
+    HIGH_REPORT_SYNTHESIS_PROMPT,
     REPORT_JUDGE_PROMPT,
     REPORT_SYNTHESIS_PROMPT,
 )
@@ -1070,25 +1071,36 @@ class ReportAgent:
                 )
                 state.report = self._fallback_report(state, exc)
                 complete_title = "研究报告已完成（降级）"
-        elif not section_team_completed:
-            findings_text = await self._report_findings_text(state)
-            prompt = REPORT_AGENT_PROMPT.format(
-                research_brief=state.research_brief or "",
-                date=today_str(),
-                findings=findings_text,
-                quality_context=self._quality_context_text(state.report_quality_context),
-            )
+        elif not section_team_completed and (state.budget_name or "").upper() == "HIGH":
             try:
-                response = await model_handler.get_chat_client(state.research_id).run_agent(
-                    ResearchAgentRequest.text_only(
-                        "ReportAgent",
-                        "",
-                        [ResearchMessage.user(prompt)],
-                        state.trace_context(),
-                    ),
+                state.report = await self._lightweight_high_report(state)
+                complete_title = "研究报告已完成"
+            except Exception as exc:
+                logger.exception(
+                    "lightweight HIGH report failed research_id=%s model_id=%s",
+                    state.research_id,
+                    state.trace_metadata_model.model_id,
                 )
-                state.add_token_usage(response.token_usage)
-                state.report = response.ai_message.text
+                await event_publisher.publish_event(
+                    state.research_id,
+                    EventType.ERROR,
+                    "HIGH 双角度报告生成失败，回退单报告流程",
+                    summarize(f"{exc.__class__.__name__}: {exc}"),
+                )
+                try:
+                    state.report = await self._single_report(state)
+                    complete_title = "研究报告已完成"
+                except Exception as fallback_exc:
+                    logger.exception(
+                        "HIGH fallback report failed research_id=%s model_id=%s",
+                        state.research_id,
+                        state.trace_metadata_model.model_id,
+                    )
+                    state.report = self._fallback_report(state, fallback_exc)
+                    complete_title = "研究报告已完成（降级）"
+        elif not section_team_completed:
+            try:
+                state.report = await self._single_report(state)
                 complete_title = "研究报告已完成"
             except Exception as exc:
                 logger.exception(
@@ -1118,6 +1130,68 @@ class ReportAgent:
         await event_publisher.publish_event(state.research_id, EventType.REPORT, complete_title, None)
         await event_publisher.publish_message(state.research_id, "assistant", state.report)
         return state.report
+
+    async def _single_report(self, state: DeepResearchState) -> str:
+        findings_text = await self._report_findings_text(state)
+        prompt = REPORT_AGENT_PROMPT.format(
+            research_brief=state.research_brief or "",
+            date=today_str(),
+            findings=findings_text,
+            quality_context=self._quality_context_text(state.report_quality_context),
+        )
+        response = await model_handler.get_chat_client(state.research_id).run_agent(
+            ResearchAgentRequest.text_only(
+                "ReportAgent",
+                "",
+                [ResearchMessage.user(prompt)],
+                state.trace_context(),
+            ),
+        )
+        state.add_token_usage(response.token_usage)
+        return response.ai_message.text
+
+    async def _lightweight_high_report(self, state: DeepResearchState) -> str:
+        findings = await self._report_findings_text(state)
+        quality_context = self._quality_context_text(state.report_quality_context)
+        angle_by_key = {item["key"]: item for item in REPORT_DRAFT_ANGLES}
+        angles = [angle_by_key["comparative"], angle_by_key["data-driven"]]
+        drafts = await asyncio.gather(
+            *(self._draft_by_angle(state, angle, findings, quality_context) for angle in angles),
+        )
+        valid = [(angle["key"], draft) for angle, draft in zip(angles, drafts) if draft]
+        if not valid:
+            raise RuntimeError("all HIGH report angles failed")
+        if len(valid) == 1:
+            return valid[0][1]
+        draft_by_key = dict(valid)
+        prompt = HIGH_REPORT_SYNTHESIS_PROMPT.format(
+            research_brief=state.research_brief or "",
+            comparative_draft=draft_by_key["comparative"],
+            data_driven_draft=draft_by_key["data-driven"],
+        )
+        await event_publisher.publish_event(
+            state.research_id,
+            EventType.AGENT_RUNTIME,
+            "HIGH 报告融合: 比较分析 + 数据证据",
+            json.dumps(
+                {"kind": "high_report_synthesize", "angles": ["comparative", "data-driven"]},
+                ensure_ascii=False,
+            ),
+        )
+        try:
+            response = await model_handler.get_chat_client(state.research_id).run_agent(
+                ResearchAgentRequest.text_only(
+                    "ReportAgent:high-synthesis",
+                    "",
+                    [ResearchMessage.user(prompt)],
+                    state.trace_context(),
+                ),
+            )
+            state.add_token_usage(response.token_usage)
+            return response.ai_message.text
+        except Exception:
+            logger.exception("HIGH report synthesis failed, fallback to comparative draft")
+            return draft_by_key["comparative"]
 
     @staticmethod
     def _angles_for_state(state: DeepResearchState) -> list[dict]:

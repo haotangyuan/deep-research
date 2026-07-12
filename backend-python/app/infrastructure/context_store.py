@@ -14,6 +14,11 @@ from app.infrastructure.db import SessionLocal
 
 ASCII_WORD_RE = re.compile(r"[A-Za-z0-9]+")
 CHINESE_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
+CONTEXT_TITLE_MAX_CHARS = 512
+
+
+def normalize_context_title(title: str | None) -> str | None:
+    return title[:CONTEXT_TITLE_MAX_CHARS] if title else title
 
 
 def normalize_query_terms(text: str) -> set[str]:
@@ -68,7 +73,7 @@ class ResearchContextStore:
                     create_time=now,
                 )
                 session.add(existing)
-            existing.title = node.title
+            existing.title = normalize_context_title(node.title)
             existing.content = node.content
             existing.content_ref = node.content_ref
             existing.parent_path = node.parent_path

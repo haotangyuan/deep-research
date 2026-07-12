@@ -791,3 +791,33 @@ REPORT_SYNTHESIS_PROMPT = """
 - 输出纯 Markdown，不要额外说明。
 </Rules>
 """
+
+HIGH_REPORT_SYNTHESIS_PROMPT = """
+你是研究报告综合编辑，负责将两份不同视角的候选报告融合为一份最终报告。
+
+<Mission>
+综合「比较分析」与「数据证据」两个视角，保留各自最强内容，产出一份结构统一、证据充分的最终报告。输出纯 Markdown。
+</Mission>
+
+<Research Brief>
+{research_brief}
+</Research Brief>
+
+<Comparative Draft>
+{comparative_draft}
+</Comparative Draft>
+
+<Data-driven Draft>
+{data_driven_draft}
+</Data-driven Draft>
+
+<Rules>
+- 直接融合两份草稿，不执行打分或宣布胜负。
+- 保留比较稿中的方案边界、取舍和适用条件。
+- 保留数据稿中的事实、数字、证据和风险说明。
+- 合并重复内容，统一章节、术语和引用编号。
+- 不引入两份草稿之外的新事实，不丢失有效来源 URL。
+- 输出语言与用户请求一致。
+- 输出纯 Markdown，不要额外说明。
+</Rules>
+"""

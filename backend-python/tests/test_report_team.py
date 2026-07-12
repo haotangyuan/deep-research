@@ -100,27 +100,30 @@ async def test_report_section_team_uses_l2_communication_revision_and_merge(monk
                 )
             elif request.stage_name.startswith("ReportSectionAgent:"):
                 section_id = request.stage_name.split(":", 1)[1]
-                text = json.dumps(
-                    {
-                        "draftMarkdown": f"## {section_id}\n\n初稿 [来源](https://example.com/ai)",
-                        "claims": [
-                            {
-                                "claim": f"{section_id} 的共享结论",
-                                "sourcePaths": [
-                                    "research://research-report-team/branches/branch-001/sources/src-ai/raw.txt",
-                                ],
-                                "sourceUrls": ["https://example.com/ai"],
-                                "confidence": 0.8,
-                            },
-                        ],
-                        "requests": (
-                            [{"targetSection": "risks", "question": "请核实增长结论的风险边界。"}]
-                            if section_id == "findings"
-                            else []
-                        ),
-                    },
-                    ensure_ascii=False,
-                )
+                if section_id == "actions":
+                    text = '{"draftMarkdown":"## actions\n包含未转义换行的初稿"}'
+                else:
+                    text = json.dumps(
+                        {
+                            "draftMarkdown": f"## {section_id}\n\n初稿 [来源](https://example.com/ai)",
+                            "claims": [
+                                {
+                                    "claim": f"{section_id} 的共享结论",
+                                    "sourcePaths": [
+                                        "research://research-report-team/branches/branch-001/sources/src-ai/raw.txt",
+                                    ],
+                                    "sourceUrls": ["https://example.com/ai"],
+                                    "confidence": 0.8,
+                                },
+                            ],
+                            "requests": (
+                                [{"targetSection": "risks", "question": "请核实增长结论的风险边界。"}]
+                                if section_id == "findings"
+                                else []
+                            ),
+                        },
+                        ensure_ascii=False,
+                    )
             elif request.stage_name == "ReportConsistencyAgent":
                 text = json.dumps(
                     {

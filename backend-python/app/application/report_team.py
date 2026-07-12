@@ -305,7 +305,15 @@ class ReportSectionTeam:
             evidence_context=evidence_context,
         )
         response = await self._call(state, f"ReportSectionAgent:{spec.section_id}", prompt, agent_id=spec.section_id)
-        payload = extract_json(response)
+        try:
+            payload = extract_json(response)
+        except Exception:
+            logger.warning(
+                "report section returned malformed JSON; preserving raw draft research_id=%s section=%s",
+                state.research_id,
+                spec.section_id,
+            )
+            payload = {}
         draft = str(payload.get("draftMarkdown") or "").strip() if isinstance(payload, dict) else ""
         if not draft:
             draft = response.strip()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.domain.context import ContextLevel, ContextNodeType, ResearchContextNodeData
-from app.infrastructure.context_store import normalize_query_terms, score_context_text
+from app.infrastructure.context_store import normalize_context_title, normalize_query_terms, score_context_text
 
 
 def test_normalize_query_terms_keeps_chinese_and_ascii_terms() -> None:
@@ -30,3 +30,8 @@ def test_context_node_data_uses_ready_status() -> None:
     )
 
     assert node.status == "ready"
+
+
+def test_normalize_context_title_matches_database_limit() -> None:
+    assert normalize_context_title("短标题") == "短标题"
+    assert normalize_context_title("长" * 600) == "长" * 512

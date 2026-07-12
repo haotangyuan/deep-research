@@ -38,21 +38,39 @@ deep-research-main/
 
 ## 工作流
 
-```mermaid
-flowchart LR
-    User["用户问题"] --> Scope["ScopeAgent<br/>澄清与研究简报"]
-    Scope -->|"方向确认模式"| HITL["人工确认 / 修订"]
-    HITL --> Supervisor
-    Scope --> Supervisor["Supervisor Leader<br/>AgentScope TaskContext"]
-    Supervisor --> Researcher["Researcher Workers<br/>AgentScope Research Team"]
-    Researcher --> Search["SearchAgent<br/>Tavily 检索与摘要"]
-    Search --> Researcher
-    Researcher --> ContextFS["Research Context FS<br/>L0 / L1 / L2 / evidence"]
-    ContextFS --> SectionTeam["章节报告团队<br/>并行起草与交叉修订"]
-    SectionTeam --> Report["ReportAgent:merge<br/>合并与优化逻辑"]
-```
-
 研究任务使用有界异步队列执行。外层 `AgentPipeline` 只维护可恢复的业务状态机；AgentScope 负责长生命周期 Agent、`AgentState`、上下文压缩、原生任务、Leader/Worker 团队、Toolkit、Middleware 和运行时事件。`MEDIUM`、`HIGH`、`ULTRA` 预算仍由代码硬约束子研究数、搜索次数、并发数和单次结果数。
+
+### 三档技术路线对照
+
+| 阶段 / 技术 | MEDIUM | HIGH | ULTRA |
+|---|---|---|---|
+| 产品定位 | 速度与成本优先，快速形成有来源的完整报告 | 质量与耗时平衡，通过双视角降低单报告偏差 | 证据覆盖、章节一致性与过程审计优先 |
+| 外层业务状态机 | `AgentPipeline`：QUEUE → SCOPE → HITL（可选）→ IN_RESEARCH → IN_REPORT → COMPLETED | 同 MEDIUM | 同一状态骨架，研究阶段增加动态轮次 |
+| `ScopeAgent` | 需求澄清、生成 research brief、识别研究类型 | 同 MEDIUM | 同 MEDIUM，并用研究类型选择 ULTRA JSON 编排模板 |
+| HITL | `NONE` 或 `DIRECTION_ONLY`，支持方向 APPROVE / REVISE | 同 MEDIUM | 同 MEDIUM，并支持下一轮轻干预 |
+| `SupervisorAgent` | 单轮规划，最多 2 个研究任务 | 单轮规划，最多 4 个研究任务 | 每轮动态规划，模板最多 6 个研究任务；Reviewer 决定继续补强或进入报告 |
+| `AgentScopeResearchTeam` | Worker 最大并发 1 | Worker 最大并发 2 | Worker 最大并发 3，跨轮复用研究状态与证据缺口 |
+| `ResearcherAgent` | 每分支最多 2 次搜索；结束时提取结构化证据包 | 每分支最多 3 次搜索；结束时提取结构化证据包 | 每分支最多 4 次搜索；证据进入轮次账本和动态质量评审 |
+| `SearchAgent` | Tavily 检索、网页摘要、TTL 缓存、in-flight 合并、超时降级 | 同 MEDIUM | 同 MEDIUM |
+| LLM 账户并发 | 全局 `LLM_MAX_CONCURRENCY=2` | 同 MEDIUM；两个报告角度可真正并发 | 同 MEDIUM；研究、Reviewer、章节起草与修订共享账户级限流 |
+| Research Context FS | 写入 L0 短摘要、L1 概览、L2 原文、`branch_summary`、`evidence` | 同 MEDIUM | 同 MEDIUM，并额外保存章节工作区、共享 claim、mailbox、初稿、修订稿和最终报告 |
+| 报告上下文选择 | `ReportContextBuilder` 按章节与字符预算装配 Context FS，失败回退 `supervisor_notes` | 同 MEDIUM | 各章节 Agent 独立执行 L0 召回、L1 精排与 L2 定向下钻 |
+| 报告 Agent 主链路 | 单 `ReportAgent` | `ReportAgent:comparative` + `ReportAgent:data-driven` 并行起草 → `ReportAgent:high-synthesis` 单次融合 | `ReportSectionPlanner` → 多个 `ReportSectionAgent` → `ReportConsistencyAgent` → 多个 `ReportSectionReviser` → `ReportAgent:merge` |
+| 报告评审 | 不额外评审 | 不运行 `ReportJudge`，融合 Agent 直接综合两个互补视角 | 章节间共享 claim 与证据请求，由一致性 Agent 生成定向 mailbox 消息 |
+| ULTRA 对抗审查 | 不启用 | 不启用 | 多个 `UltraDynamicReviewer` 按 coverage、evidence、freshness、source diversity、consistency 投票 |
+| 声明交叉验证 | 不启用 | 不启用 | `ClaimVerifier` 对最终报告关键声明进行交叉验证和必要修订 |
+| 失败与降级 | 单报告失败 → 兜底报告 | 双角度均失败 → 单 `ReportAgent`；融合失败 → 保留 comparative 草稿；单报告再失败 → 兜底报告 | 章节团队失败 → 完整借鉴点 C（多角度起草、Judge、融合）；再次失败 → 兜底报告 |
+| 持久化与可观测性 | MySQL 状态与消息、Redis checkpoint/SSE timeline、AgentScope runtime、OTel Span | 同 MEDIUM，并记录双角度与融合事件 | 同 MEDIUM，并记录轮次、work item、decision log、evidence ledger、章节通信与声明验证事件 |
+
+### 三档真实冷启动验证
+
+以下结果使用同一 MiMo 模型、相同研究题目和 `LLM_MAX_CONCURRENCY=2`，每档测试前均重启后端以清空进程内搜索与摘要缓存。
+
+| 档位 | 完成耗时 | 输入 Token | 输出 Token | 最终报告 | 来源 URL | 实际报告阶段 |
+|---|---:|---:|---:|---:|---:|---|
+| MEDIUM | 6 分 29 秒 | 81,295 | 30,425 | 9,133 字符 | 16 | 单 `ReportAgent` |
+| HIGH | 12 分 02 秒 | 132,056 | 38,392 | 10,034 字符 | 24 | comparative + data-driven + high-synthesis |
+| ULTRA | 24 分 41 秒 | 501,453 | 120,554 | 25,474 字符 | 54 | 5 个章节 Agent + Consistency + 5 个 Reviser + merge + ClaimVerifier |
 
 ### Ultra 章节报告团队
 
@@ -64,7 +82,7 @@ Ultra 模板默认启用 `report.sectionTeamEnabled`。报告阶段不再只由�
 4. 一致性 Agent 检查数字、术语、重复、证据冲突和跨章节依赖，通过持久化 mailbox 发送定向修订要求。
 5. 章节 Agent 并行修订后，主 `ReportAgent:merge` 只负责合并、消重、统一术语和优化段落逻辑。
 
-章节团队失败时会自动回退原 Ultra 多角度起草/评审/融合链路，REST、SSE 和最终报告协议不变。
+ULTRA 的主报告链路是章节团队；完整的借鉴点 C（多角度起草、评委打分、冠军与亮点融合）仅作为章节团队失败后的降级路径。HIGH 使用不带 Judge 的轻量借鉴点 C：比较分析与数据证据两个视角并行起草，再执行一次融合。REST、SSE 和最终报告协议在三个档位间保持一致。
 
 ## AgentScope 当前角色
 

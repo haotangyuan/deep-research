@@ -644,3 +644,72 @@ async def test_report_synthesis_receives_judge_graft_suggestions(monkeypatch) ->
 
     assert "必须嫁接建议" in prompts_by_stage["ReportSynthesizer"]
     assert "保留关键对比表" in prompts_by_stage["ReportSynthesizer"]
+
+
+@pytest.mark.asyncio
+async def test_high_report_uses_two_angles_and_one_synthesis_without_judge(monkeypatch) -> None:
+    calls: list[str] = []
+    prompts_by_stage: dict[str, str] = {}
+    state = _make_state()
+    state.workflow_mode = WorkflowMode.FIXED
+    state.workflow_template = {}
+    state.budget_name = "HIGH"
+    state.supervisor_notes = ["## 研究结论\n\n对比证据"]
+
+    class FakeClient:
+        async def run_agent(self, request):
+            calls.append(request.stage_name)
+            prompts_by_stage[request.stage_name] = request.messages[-1].text
+            return SimpleNamespace(
+                token_usage=None,
+                ai_message=SimpleNamespace(text=f"# {request.stage_name} 报告"),
+            )
+
+    async def publish_event(*_args, **_kwargs):
+        return 1
+
+    monkeypatch.setattr("app.application.agents.model_handler.get_chat_client", lambda _research_id: FakeClient())
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_event", publish_event)
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_message", publish_event)
+
+    report = await report_agent.run(state)
+
+    assert calls == [
+        "ReportAgent:comparative",
+        "ReportAgent:data-driven",
+        "ReportAgent:high-synthesis",
+    ]
+    assert "ReportJudge" not in calls
+    assert "# ReportAgent:comparative 报告" in prompts_by_stage["ReportAgent:high-synthesis"]
+    assert "# ReportAgent:data-driven 报告" in prompts_by_stage["ReportAgent:high-synthesis"]
+    assert report == "# ReportAgent:high-synthesis 报告"
+
+
+@pytest.mark.asyncio
+async def test_medium_report_keeps_single_report_agent(monkeypatch) -> None:
+    calls: list[str] = []
+    state = _make_state()
+    state.workflow_mode = WorkflowMode.FIXED
+    state.workflow_template = {}
+    state.budget_name = "MEDIUM"
+    state.supervisor_notes = ["## 研究结论\n\n基础证据"]
+
+    class FakeClient:
+        async def run_agent(self, request):
+            calls.append(request.stage_name)
+            return SimpleNamespace(
+                token_usage=None,
+                ai_message=SimpleNamespace(text="# MEDIUM 报告"),
+            )
+
+    async def publish_event(*_args, **_kwargs):
+        return 1
+
+    monkeypatch.setattr("app.application.agents.model_handler.get_chat_client", lambda _research_id: FakeClient())
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_event", publish_event)
+    monkeypatch.setattr("app.application.agents.event_publisher.publish_message", publish_event)
+
+    report = await report_agent.run(state)
+
+    assert calls == ["ReportAgent"]
+    assert report == "# MEDIUM 报告"
