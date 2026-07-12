@@ -105,13 +105,13 @@ AgentScope 已不再只是底层 Agent 调用适配器，而是项目的 **Agent
 **智能深度研究平台｜项目负责人**<br>
 **FastAPI、AgentScope 2.0、React、MySQL、Redis、OpenTelemetry、Langfuse**
 
-项目描述：构建基于多 Agent 协作的自动化深度研究平台，覆盖需求澄清、任务规划、并行检索、网页摘要、报告生成、人工确认、断点恢复与实时链路展示。
+项目描述：基于 FastAPI、AgentScope 2.0 和 React 构建多 Agent 深度研究平台，实现从需求澄清、动态研究、证据治理到协作式报告生成的完整链路。
 
-- **分层架构设计**：采用「业务状态机 + Agent 运行时」分层架构——外层 `AgentPipeline` 基于 MySQL/Redis 维护 QUEUE、SCOPE、HITL、IN_RESEARCH、IN_REPORT、COMPLETED 等可恢复的业务状态机，内层 AgentScope 2.0.3 负责 Agent 生命周期、隔离 `AgentState`、原生 `TaskContext`、Leader/Worker 团队、Toolkit、Middleware 与 tracing；该边界把数据库事务、前端协议与框架内部解耦，让框架承担认知执行，业务层掌控持久化与一致性。
-- **ULTRA 动态工作流档位**：设计质量优先的动态研究编排：ScopeAgent 在生成 research brief 时同步识别研究类型，并选择 JSON 模板控制轮次、预算、reviewer lens、章节团队与声明验证策略；Researcher 输出结构化 findings + sources 供证据账本消费，Supervisor 通过多 reviewer 对抗审查和 5 维质量评分决定「继续补强 / 进入报告」；报告阶段由章节 Agent 并行下钻 L2、起草、交换共享声明和证据请求，经一致性 Agent 路由修订后由主 ReportAgent 仅做逻辑合并，同时保留原多角度链路降级、关键声明交叉验证、用户轻干预和证据缺口披露。
-- **HITL 与可靠状态恢复**：实现研究方向 APPROVE/REVISE 确认（范围分析后暂停等待用户反馈）、失败续跑与取消清理；将业务 checkpoint、AgentScope 任务状态及有界 runtime snapshot 保存至 Redis，通过数据库 CAS 限制合法状态迁移，避免重复执行与并发误操作，断点恢复时优先复用 checkpoint 跳过已完成阶段。
-- **可解释进度与用户可干预研究过程**：设计 MySQL + Redis ZSet 双写时间线和 `Last-Event-ID` 断线重放，保证 SSE 断线后无损恢复；通过 Event Bridge 将动态决策、任务批次、干预事件和采纳结果映射为兼容事件，前端分层展示研究进度、决策依据与下一轮调整回显，使多轮研究过程对用户全程透明可干预。
-- **上下文治理与全链路可观测性**：针对长研究任务中的上下文碎片化、检索黑盒、Token 膨胀和“近似无损压缩”超时问题，设计面向 Agent 的 Research Context FS，以 `research://...` 统一组织搜索资源、分支记忆、证据包和报告协作产物；通过 L0 摘要召回、L1 概览精排、L2 原文定向下钻降低 Token 消耗，并将章节证据快照、共享 claim、mailbox、初稿、修订稿和最终报告全部持久化；同时保留 `supervisor_notes` 回退和原 ReportAgent 降级链路，配套预算限流、搜索/摘要 TTL 缓存、in-flight 合并、网页 AgentState 隔离和超时降级，并以 OpenTelemetry 贯通 `workflow → stage → AgentScope agent → model/tool` 全链路。
+- **分层架构设计**：将系统拆分为外层业务状态机与内层 Agent 运行时；`AgentPipeline` 负责 MySQL/Redis 状态一致性、HITL 和断点恢复，AgentScope 负责 Agent 生命周期、任务上下文、工具调用与认知执行，避免将业务事务和前端协议耦合进 Agent 框架。
+- **动态工作流设计**：实现 MEDIUM、HIGH、ULTRA 三档研究策略；ULTRA 在需求澄清阶段识别研究类型并选择 JSON 编排模板，由模板控制研究轮次、任务预算、Reviewer 视角和报告策略。每轮由 Supervisor 根据上一轮证据缺口重新规划任务，多 Reviewer 从覆盖度、证据质量、时效性、来源多样性和一致性进行对抗评审，投票决定继续补强或进入报告，最后通过章节 Agent、一致性 Agent、修订 Agent 和 ClaimVerifier 完成协作式报告生成。
+- **上下文与证据治理**：设计 Research Context FS，将网页材料拆分为 L0 摘要、L1 概览、L2 原文，并沉淀分支结论和结构化 evidence；报告阶段按章节和预算检索证据，解决长任务上下文膨胀、来源难追溯和一次性 Prompt 过长问题。
+- **可靠状态恢复与 HITL 交互**：设计两层 HITL 机制：研究开始前支持方向 `APPROVE / REVISE`，根据用户反馈重新生成 research brief；ULTRA 研究过程中支持追加关注章节、证据补强方式和备注，并在不中断当前轮的情况下作为下一轮规划偏置生效。通过 MySQL CAS 状态迁移、Redis Checkpoint、AgentScope runtime snapshot 实现任务续跑和异常恢复，并使用 Redis ZSet、SSE、`Last-Event-ID` 支持实时进度与断线重放。
+- **性能与全链路可观测性**：通过研究任务并发、`LLM_MAX_CONCURRENCY=2`、搜索/摘要 TTL 缓存、in-flight 合并和超时降级控制耗时；三档冷启动实测约为 6/12/25 分钟，并使用 OpenTelemetry + Langfuse 贯通 workflow、Agent、model、tool 链路以定位性能瓶颈和异常。
 
 ## 快速开始
 
