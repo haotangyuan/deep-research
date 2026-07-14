@@ -76,6 +76,7 @@ docker compose up -d mysql redis
 - ULTRA 动态工作流 + 轻干预：[`notebook/features/ULTRA动态工作流与轻干预.md`](notebook/features/ULTRA动态工作流与轻干预.md)
 - HITL 方向确认：[`notebook/features/hitl.md`](notebook/features/hitl.md)
 - 性能与可观测性：[`notebook/operations/性能与可观测性.md`](notebook/operations/性能与可观测性.md)
+- ULTRA 可观测改造（M1–M5 + 章节团队 1406 修复）：[`docs/observability-ultra-improvement.md`](docs/observability-ultra-improvement.md)
 - Research Context FS 实施：[`docs/research-context-fs-implementation-summary.md`](docs/research-context-fs-implementation-summary.md)
 - 章节报告团队：[`docs/report-section-agent-team.md`](docs/report-section-agent-team.md)
 - 后端 README：[`backend-python/README.md`](backend-python/README.md)

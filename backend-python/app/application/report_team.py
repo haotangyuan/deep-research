@@ -10,7 +10,7 @@ from typing import Any
 from app.application.context_retrieval import rank_nodes_for_query
 from app.core.config import get_settings
 from app.core.constants import EventType
-from app.core.json_utils import extract_json
+from app.core.json_utils import extract_json, truncate
 from app.domain.context import (
     ContextLevel,
     ContextNodeType,
@@ -29,6 +29,7 @@ from app.domain.state import DeepResearchState
 from app.infrastructure.context_store import ResearchContextStore
 from app.infrastructure.events import event_publisher
 from app.infrastructure.llm import model_handler
+from app.infrastructure.observability import stage_span
 
 
 logger = logging.getLogger(__name__)
@@ -213,70 +214,77 @@ class ReportSectionTeam:
         self.store = store or ResearchContextStore()
 
     async def run(self, state: DeepResearchState, quality_context: str) -> str:
-        sections = await self._plan_sections(state)
-        await self._write_plan(state, sections)
-        source_nodes = await self.store.list_nodes(
-            state.research_id,
-            node_types=[
-                ContextNodeType.EVIDENCE.value,
-                ContextNodeType.BRANCH_SUMMARY.value,
-                ContextNodeType.SOURCE_ABSTRACT.value,
-                ContextNodeType.SOURCE_OVERVIEW.value,
-            ],
-        )
-        await self._publish(state, "报告章节团队已启动", {
-            "kind": "report_team",
-            "phase": "draft",
-            "sectionCount": len(sections),
-        })
-        artifacts = await asyncio.gather(
-            *(self._draft_section(state, spec, source_nodes) for spec in sections),
-        )
-        messages = await self._review_cross_section_consistency(state, artifacts)
-        revised = await asyncio.gather(
-            *(self._revise_section(state, artifact, artifacts, messages) for artifact in artifacts),
-        )
-        await self._publish(state, "报告章节通信与修订已完成", {
-            "kind": "report_team",
-            "phase": "revised",
-            "sectionCount": len(revised),
-            "messageCount": len(messages),
-        })
-        return await self._merge_sections(state, revised, quality_context)
+        async with stage_span("ReportSectionTeam", state) as span:
+            sections = await self._plan_sections(state)
+            await self._write_plan(state, sections)
+            source_nodes = await self.store.list_nodes(
+                state.research_id,
+                node_types=[
+                    ContextNodeType.EVIDENCE.value,
+                    ContextNodeType.BRANCH_SUMMARY.value,
+                    ContextNodeType.SOURCE_ABSTRACT.value,
+                    ContextNodeType.SOURCE_OVERVIEW.value,
+                ],
+            )
+            span.set_attribute("report.section.count", len(sections))
+            span.set_attribute("report.source.nodes", len(source_nodes))
+            await self._publish(state, "报告章节团队已启动", {
+                "kind": "report_team",
+                "phase": "draft",
+                "sectionCount": len(sections),
+            })
+            artifacts = await asyncio.gather(
+                *(self._draft_section(state, spec, source_nodes) for spec in sections),
+            )
+            messages = await self._review_cross_section_consistency(state, artifacts)
+            revised = await asyncio.gather(
+                *(self._revise_section(state, artifact, artifacts, messages) for artifact in artifacts),
+            )
+            await self._publish(state, "报告章节通信与修订已完成", {
+                "kind": "report_team",
+                "phase": "revised",
+                "sectionCount": len(revised),
+                "messageCount": len(messages),
+            })
+            return await self._merge_sections(state, revised, quality_context)
 
     async def _plan_sections(self, state: DeepResearchState) -> list[ReportSectionSpec]:
-        prompt = SECTION_PLAN_PROMPT.format(research_brief=state.research_brief or "")
-        try:
-            response = await self._call(state, "ReportSectionPlanner", prompt, agent_id="section-planner")
-            payload = extract_json(response)
-            raw_sections = payload.get("sections") if isinstance(payload, dict) else None
-            planned: list[ReportSectionSpec] = []
-            used: set[str] = set()
-            for index, item in enumerate(raw_sections or []):
-                if not isinstance(item, dict):
-                    continue
-                section_id = self._slug(str(item.get("sectionId") or item.get("title") or f"section-{index + 1}"))
-                if not section_id or section_id in used:
-                    section_id = f"section-{index + 1}"
-                used.add(section_id)
-                title = str(item.get("title") or "").strip()
-                objective = str(item.get("objective") or "").strip()
-                if not title or not objective:
-                    continue
-                planned.append(
-                    ReportSectionSpec(
-                        section_id=section_id,
-                        title=title,
-                        objective=objective,
-                        evidence_requirements=self._string_list(item.get("evidenceRequirements"))[:8],
-                        related_sections=self._string_list(item.get("relatedSections"))[:8],
-                    ),
-                )
-            if 3 <= len(planned) <= 6:
-                return planned
-        except Exception:
-            logger.exception("report section planning failed research_id=%s", state.research_id)
-        return [item.model_copy(deep=True) for item in DEFAULT_SECTIONS]
+        async with stage_span("ReportSectionPlanner", state) as span:
+            prompt = SECTION_PLAN_PROMPT.format(research_brief=state.research_brief or "")
+            try:
+                response = await self._call(state, "ReportSectionPlanner", prompt, agent_id="section-planner")
+                payload = extract_json(response)
+                raw_sections = payload.get("sections") if isinstance(payload, dict) else None
+                planned: list[ReportSectionSpec] = []
+                used: set[str] = set()
+                for index, item in enumerate(raw_sections or []):
+                    if not isinstance(item, dict):
+                        continue
+                    section_id = self._slug(str(item.get("sectionId") or item.get("title") or f"section-{index + 1}"))
+                    if not section_id or section_id in used:
+                        section_id = f"section-{index + 1}"
+                    used.add(section_id)
+                    title = str(item.get("title") or "").strip()
+                    objective = str(item.get("objective") or "").strip()
+                    if not title or not objective:
+                        continue
+                    planned.append(
+                        ReportSectionSpec(
+                            section_id=section_id,
+                            title=title,
+                            objective=objective,
+                            evidence_requirements=self._string_list(item.get("evidenceRequirements"))[:8],
+                            related_sections=self._string_list(item.get("relatedSections"))[:8],
+                        ),
+                    )
+                if 3 <= len(planned) <= 6:
+                    span.set_attribute("report.section.count", len(planned))
+                    return planned
+            except Exception:
+                logger.exception("report section planning failed research_id=%s", state.research_id)
+            span.set_attribute("report.section.count", len(DEFAULT_SECTIONS))
+            span.set_attribute("report.plan.fallback", True)
+            return [item.model_copy(deep=True) for item in DEFAULT_SECTIONS]
 
     async def _draft_section(
         self,
@@ -284,72 +292,78 @@ class ReportSectionTeam:
         spec: ReportSectionSpec,
         nodes: list[Any],
     ) -> ReportSectionArtifact:
-        evidence_context, evidence_paths, raw_paths = await self._retrieve_section_context(state, spec, nodes)
-        await self._write_json_node(
-            state,
-            f"sections/{spec.section_id}/evidence.json",
-            ContextNodeType.REPORT_SECTION_EVIDENCE,
-            {
-                "section": spec.model_dump(),
-                "evidencePaths": evidence_paths,
-                "rawPaths": raw_paths,
-                "content": evidence_context,
-            },
-            title=spec.title,
-        )
-        prompt = SECTION_DRAFT_PROMPT.format(
-            section_title=spec.title,
-            research_brief=state.research_brief or "",
-            section_objective=spec.objective,
-            evidence_requirements="、".join(spec.evidence_requirements) or "使用最相关的高质量证据",
-            evidence_context=evidence_context,
-        )
-        response = await self._call(state, f"ReportSectionAgent:{spec.section_id}", prompt, agent_id=spec.section_id)
-        try:
-            payload = extract_json(response)
-        except Exception:
-            logger.warning(
-                "report section returned malformed JSON; preserving raw draft research_id=%s section=%s",
-                state.research_id,
-                spec.section_id,
-            )
-            payload = {}
-        draft = str(payload.get("draftMarkdown") or "").strip() if isinstance(payload, dict) else ""
-        if not draft:
-            draft = response.strip()
-        claims = self._parse_claims(spec.section_id, payload.get("claims") if isinstance(payload, dict) else None)
-        artifact = ReportSectionArtifact(
-            spec=spec,
-            evidence_context=evidence_context,
-            evidence_paths=evidence_paths,
-            raw_paths=raw_paths,
-            draft=draft,
-            claims=claims,
-            metadata={"requests": payload.get("requests") if isinstance(payload, dict) else []},
-        )
-        await self._write_text_node(
-            state,
-            f"sections/{spec.section_id}/draft.md",
-            ContextNodeType.REPORT_SECTION_DRAFT,
-            draft,
-            title=spec.title,
-        )
-        for claim in claims:
+        async with stage_span("ReportSectionDraft", state) as span:
+            span.set_attribute("report.section.id", spec.section_id)
+            span.set_attribute("report.section.title", spec.title)
+            evidence_context, evidence_paths, raw_paths = await self._retrieve_section_context(state, spec, nodes)
+            span.set_attribute("report.evidence.nodes", len(evidence_paths))
+            span.set_attribute("report.raw.nodes", len(raw_paths))
             await self._write_json_node(
                 state,
-                f"shared/claims/{claim.claim_id}.json",
-                ContextNodeType.REPORT_SHARED_CLAIM,
-                claim.model_dump(),
-                title=claim.claim,
+                f"sections/{spec.section_id}/evidence.json",
+                ContextNodeType.REPORT_SECTION_EVIDENCE,
+                {
+                    "section": spec.model_dump(),
+                    "evidencePaths": evidence_paths,
+                    "rawPaths": raw_paths,
+                    "content": evidence_context,
+                },
+                title=spec.title,
             )
-        await self._publish(state, f"章节初稿完成：{spec.title}", {
-            "kind": "report_section",
-            "phase": "draft",
-            "sectionId": spec.section_id,
-            "claimCount": len(claims),
-            "rawSourceCount": len(raw_paths),
-        })
-        return artifact
+            prompt = SECTION_DRAFT_PROMPT.format(
+                section_title=spec.title,
+                research_brief=state.research_brief or "",
+                section_objective=spec.objective,
+                evidence_requirements="、".join(spec.evidence_requirements) or "使用最相关的高质量证据",
+                evidence_context=evidence_context,
+            )
+            response = await self._call(state, f"ReportSectionAgent:{spec.section_id}", prompt, agent_id=spec.section_id)
+            try:
+                payload = extract_json(response)
+            except Exception:
+                logger.warning(
+                    "report section returned malformed JSON; preserving raw draft research_id=%s section=%s",
+                    state.research_id,
+                    spec.section_id,
+                )
+                payload = {}
+            draft = str(payload.get("draftMarkdown") or "").strip() if isinstance(payload, dict) else ""
+            if not draft:
+                draft = response.strip()
+            claims = self._parse_claims(spec.section_id, payload.get("claims") if isinstance(payload, dict) else None)
+            span.set_attribute("report.claim.count", len(claims))
+            artifact = ReportSectionArtifact(
+                spec=spec,
+                evidence_context=evidence_context,
+                evidence_paths=evidence_paths,
+                raw_paths=raw_paths,
+                draft=draft,
+                claims=claims,
+                metadata={"requests": payload.get("requests") if isinstance(payload, dict) else []},
+            )
+            await self._write_text_node(
+                state,
+                f"sections/{spec.section_id}/draft.md",
+                ContextNodeType.REPORT_SECTION_DRAFT,
+                draft,
+                title=spec.title,
+            )
+            for claim in claims:
+                await self._write_json_node(
+                    state,
+                    f"shared/claims/{claim.claim_id}.json",
+                    ContextNodeType.REPORT_SHARED_CLAIM,
+                    claim.model_dump(),
+                    title=claim.claim,
+                )
+            await self._publish(state, f"章节初稿完成：{spec.title}", {
+                "kind": "report_section",
+                "phase": "draft",
+                "sectionId": spec.section_id,
+                "claimCount": len(claims),
+                "rawSourceCount": len(raw_paths),
+            })
+            return artifact
 
     async def _retrieve_section_context(
         self,
@@ -431,67 +445,70 @@ class ReportSectionTeam:
         state: DeepResearchState,
         artifacts: list[ReportSectionArtifact],
     ) -> list[ReportAgentMessage]:
-        rendered = []
-        for artifact in artifacts:
-            rendered.append(
-                f"## [{artifact.spec.section_id}] {artifact.spec.title}\n"
-                f"{artifact.draft}\n\n"
-                f"Shared claims:\n{json.dumps([item.model_dump() for item in artifact.claims], ensure_ascii=False)}\n"
-                f"Peer requests:\n{json.dumps(artifact.metadata.get('requests') or [], ensure_ascii=False)}",
-            )
-        prompt = CONSISTENCY_PROMPT.format(
-            research_brief=state.research_brief or "",
-            artifacts="\n\n---\n\n".join(rendered),
-        )
-        try:
-            response = await self._call(state, "ReportConsistencyAgent", prompt, agent_id="consistency-agent")
-            payload = extract_json(response)
-            raw_messages = payload.get("messages") if isinstance(payload, dict) else None
-        except Exception:
-            logger.exception("report consistency review failed research_id=%s", state.research_id)
-            raw_messages = []
-        section_ids = {artifact.spec.section_id for artifact in artifacts}
-        messages = self._peer_request_messages(artifacts, section_ids)
-        for index, item in enumerate(raw_messages or []):
-            if not isinstance(item, dict):
-                continue
-            target = str(item.get("toAgent") or "").strip()
-            instruction = str(item.get("instruction") or "").strip()
-            if target not in section_ids or not instruction:
-                continue
-            digest = self._digest(f"{target}|{index}|{instruction}")
-            messages.append(
-                ReportAgentMessage(
-                    message_id=f"msg-{digest}",
-                    from_agent=str(item.get("fromAgent") or "consistency-agent"),
-                    to_agent=target,
-                    message_type=str(item.get("type") or "review_request"),
-                    subject=str(item.get("subject") or "跨章节一致性修订"),
-                    instruction=instruction,
-                    related_claim_ids=self._string_list(item.get("relatedClaimIds")),
-                ),
-            )
-        if not messages and len(artifacts) > 1:
+        async with stage_span("ReportConsistency", state) as span:
+            rendered = []
             for artifact in artifacts:
+                rendered.append(
+                    f"## [{artifact.spec.section_id}] {artifact.spec.title}\n"
+                    f"{artifact.draft}\n\n"
+                    f"Shared claims:\n{json.dumps([item.model_dump() for item in artifact.claims], ensure_ascii=False)}\n"
+                    f"Peer requests:\n{json.dumps(artifact.metadata.get('requests') or [], ensure_ascii=False)}",
+                )
+            prompt = CONSISTENCY_PROMPT.format(
+                research_brief=state.research_brief or "",
+                artifacts="\n\n---\n\n".join(rendered),
+            )
+            try:
+                response = await self._call(state, "ReportConsistencyAgent", prompt, agent_id="consistency-agent")
+                payload = extract_json(response)
+                raw_messages = payload.get("messages") if isinstance(payload, dict) else None
+            except Exception:
+                logger.exception("report consistency review failed research_id=%s", state.research_id)
+                raw_messages = []
+            section_ids = {artifact.spec.section_id for artifact in artifacts}
+            messages = self._peer_request_messages(artifacts, section_ids)
+            for index, item in enumerate(raw_messages or []):
+                if not isinstance(item, dict):
+                    continue
+                target = str(item.get("toAgent") or "").strip()
+                instruction = str(item.get("instruction") or "").strip()
+                if target not in section_ids or not instruction:
+                    continue
+                digest = self._digest(f"{target}|{index}|{instruction}")
                 messages.append(
                     ReportAgentMessage(
-                        message_id=f"msg-{self._digest(artifact.spec.section_id + '|shared-review')}",
-                        from_agent="consistency-agent",
-                        to_agent=artifact.spec.section_id,
-                        message_type="review_request",
-                        subject="共享声明复核",
-                        instruction="复核其他章节的共享声明；如与本章相关，带来源引用后纳入，并显式处理冲突。",
+                        message_id=f"msg-{digest}",
+                        from_agent=str(item.get("fromAgent") or "consistency-agent"),
+                        to_agent=target,
+                        message_type=str(item.get("type") or "review_request"),
+                        subject=str(item.get("subject") or "跨章节一致性修订"),
+                        instruction=instruction,
+                        related_claim_ids=self._string_list(item.get("relatedClaimIds")),
                     ),
                 )
-        for message in messages:
-            await self._write_json_node(
-                state,
-                f"mailboxes/{message.to_agent}/{message.message_id}.json",
-                ContextNodeType.REPORT_AGENT_MESSAGE,
-                message.model_dump(),
-                title=message.subject,
-            )
-        return messages
+            if not messages and len(artifacts) > 1:
+                for artifact in artifacts:
+                    messages.append(
+                        ReportAgentMessage(
+                            message_id=f"msg-{self._digest(artifact.spec.section_id + '|shared-review')}",
+                            from_agent="consistency-agent",
+                            to_agent=artifact.spec.section_id,
+                            message_type="review_request",
+                            subject="共享声明复核",
+                            instruction="复核其他章节的共享声明；如与本章相关，带来源引用后纳入，并显式处理冲突。",
+                        ),
+                    )
+            span.set_attribute("report.message.count", len(messages))
+            span.set_attribute("report.section.count", len(artifacts))
+            for message in messages:
+                await self._write_json_node(
+                    state,
+                    f"mailboxes/{message.to_agent}/{message.message_id}.json",
+                    ContextNodeType.REPORT_AGENT_MESSAGE,
+                    message.model_dump(),
+                    title=message.subject,
+                )
+            return messages
 
     def _peer_request_messages(
         self,
@@ -527,42 +544,46 @@ class ReportSectionTeam:
         artifacts: list[ReportSectionArtifact],
         messages: list[ReportAgentMessage],
     ) -> ReportSectionArtifact:
-        peer_claims = [
-            claim.model_dump()
-            for peer in artifacts
-            if peer.spec.section_id != artifact.spec.section_id
-            for claim in peer.claims
-        ]
-        mailbox = [item.model_dump() for item in messages if item.to_agent == artifact.spec.section_id]
-        prompt = SECTION_REVISION_PROMPT.format(
-            section_title=artifact.spec.title,
-            draft=artifact.draft,
-            shared_claims=json.dumps(peer_claims, ensure_ascii=False, indent=2),
-            messages=json.dumps(mailbox, ensure_ascii=False, indent=2),
-        )
-        try:
-            revision = await self._call(
+        async with stage_span("ReportSectionRevise", state) as span:
+            span.set_attribute("report.section.id", artifact.spec.section_id)
+            peer_claims = [
+                claim.model_dump()
+                for peer in artifacts
+                if peer.spec.section_id != artifact.spec.section_id
+                for claim in peer.claims
+            ]
+            mailbox = [item.model_dump() for item in messages if item.to_agent == artifact.spec.section_id]
+            span.set_attribute("report.peer.claims", len(peer_claims))
+            span.set_attribute("report.mailbox.messages", len(mailbox))
+            prompt = SECTION_REVISION_PROMPT.format(
+                section_title=artifact.spec.title,
+                draft=artifact.draft,
+                shared_claims=json.dumps(peer_claims, ensure_ascii=False, indent=2),
+                messages=json.dumps(mailbox, ensure_ascii=False, indent=2),
+            )
+            try:
+                revision = await self._call(
+                    state,
+                    f"ReportSectionReviser:{artifact.spec.section_id}",
+                    prompt,
+                    agent_id=artifact.spec.section_id,
+                )
+                artifact.revision = revision.strip() or artifact.draft
+            except Exception:
+                logger.exception(
+                    "report section revision failed research_id=%s section=%s",
+                    state.research_id,
+                    artifact.spec.section_id,
+                )
+                artifact.revision = artifact.draft
+            await self._write_text_node(
                 state,
-                f"ReportSectionReviser:{artifact.spec.section_id}",
-                prompt,
-                agent_id=artifact.spec.section_id,
+                f"sections/{artifact.spec.section_id}/revision.md",
+                ContextNodeType.REPORT_SECTION_REVISION,
+                artifact.final_text,
+                title=artifact.spec.title,
             )
-            artifact.revision = revision.strip() or artifact.draft
-        except Exception:
-            logger.exception(
-                "report section revision failed research_id=%s section=%s",
-                state.research_id,
-                artifact.spec.section_id,
-            )
-            artifact.revision = artifact.draft
-        await self._write_text_node(
-            state,
-            f"sections/{artifact.spec.section_id}/revision.md",
-            ContextNodeType.REPORT_SECTION_REVISION,
-            artifact.final_text,
-            title=artifact.spec.title,
-        )
-        return artifact
+            return artifact
 
     async def _merge_sections(
         self,
@@ -570,24 +591,26 @@ class ReportSectionTeam:
         artifacts: list[ReportSectionArtifact],
         quality_context: str,
     ) -> str:
-        sections = "\n\n---\n\n".join(
-            f"<!-- section:{artifact.spec.section_id} -->\n{artifact.final_text}"
-            for artifact in artifacts
-        )
-        prompt = REPORT_MERGE_PROMPT.format(
-            research_brief=state.research_brief or "",
-            quality_context=quality_context or "无额外约束",
-            sections=sections,
-        )
-        report = await self._call(state, "ReportAgent:merge", prompt, agent_id="report-merger")
-        await self._write_text_node(
-            state,
-            "final.md",
-            ContextNodeType.REPORT_CONTEXT,
-            report,
-            title="最终研究报告",
-        )
-        return report
+        async with stage_span("ReportMerge", state) as span:
+            span.set_attribute("report.section.count", len(artifacts))
+            sections = "\n\n---\n\n".join(
+                f"<!-- section:{artifact.spec.section_id} -->\n{artifact.final_text}"
+                for artifact in artifacts
+            )
+            prompt = REPORT_MERGE_PROMPT.format(
+                research_brief=state.research_brief or "",
+                quality_context=quality_context or "无额外约束",
+                sections=sections,
+            )
+            report = await self._call(state, "ReportAgent:merge", prompt, agent_id="report-merger")
+            await self._write_text_node(
+                state,
+                "final.md",
+                ContextNodeType.REPORT_CONTEXT,
+                report,
+                title="最终研究报告",
+            )
+            return report
 
     async def _call(self, state: DeepResearchState, stage: str, prompt: str, *, agent_id: str) -> str:
         runtime_context = {**state.trace_context(), "report.agent.id": agent_id}
@@ -637,6 +660,8 @@ class ReportSectionTeam:
         *,
         title: str,
     ) -> None:
+        # 兜底截断：content 列为 MEDIUMTEXT(16MB)，按 utf8mb4 最坏 4 字节/字符
+        # 留余量截到 300 万字符，正常章节 draft 远低于此，仅在病态超长时触发
         report_root = ResearchContextPath.report(state.research_id, "workspace")
         path = report_root.child(name)
         await self.store.put_node(
@@ -646,7 +671,7 @@ class ReportSectionTeam:
                 node_type=node_type,
                 level=ContextLevel.DERIVED,
                 title=title,
-                content=content,
+                content=truncate(content, 3_000_000),
                 parent_path=report_root.raw,
                 round_no=state.dynamic_round_no,
                 metadata={"reportAgentTeam": True},

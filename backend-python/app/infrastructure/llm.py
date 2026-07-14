@@ -108,6 +108,7 @@ class AgentScopeChatClient:
             self.framework,
             request_summary,
             len(request.tool_specifications),
+            request.stage_name,
         ) as span:
             try:
                 response = await self._run_agent_with_transient_retries(request, entry.agent)

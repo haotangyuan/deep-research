@@ -626,22 +626,26 @@ class AgentPipeline:
         await update_research_session(research_id, WorkflowStatus.COMPLETED, state)
 
     async def _apply_ultra_report_gate(self, state: DeepResearchState) -> None:
-        context = state.report_quality_context or build_report_quality_context(state.latest_dynamic_decision)
-        state.report_quality_context = context
-        title = "报告前验证通过" if context.get("status") == "ready" else "报告前验证未完全通过"
-        await event_publisher.publish_event(
-            state.research_id,
-            EventType.SUPERVISOR,
-            title,
-            render_report_quality_markdown(context),
-            state.current_supervisor_event_id,
-        )
-        if context.get("status") != "ready":
-            await event_publisher.publish_message(
+        async with stage_span("UltraReportGate", state) as span:
+            context = state.report_quality_context or build_report_quality_context(state.latest_dynamic_decision)
+            state.report_quality_context = context
+            span.set_attribute("report.quality.status", str(context.get("status") or ""))
+            span.set_attribute("report.weak.sections.count", len(context.get("weakSections") or []))
+            span.set_attribute("report.blocking.gaps.count", len(context.get("blockingGaps") or []))
+            title = "报告前验证通过" if context.get("status") == "ready" else "报告前验证未完全通过"
+            await event_publisher.publish_event(
                 state.research_id,
-                "assistant",
-                "报告前验证发现仍有证据缺口，最终报告会明确标注不确定性与未覆盖部分。",
+                EventType.SUPERVISOR,
+                title,
+                render_report_quality_markdown(context),
+                state.current_supervisor_event_id,
             )
+            if context.get("status") != "ready":
+                await event_publisher.publish_message(
+                    state.research_id,
+                    "assistant",
+                    "报告前验证发现仍有证据缺口，最终报告会明确标注不确定性与未覆盖部分。",
+                )
 
 
 async def update_research_session(research_id: str, status: str, state: DeepResearchState) -> None:

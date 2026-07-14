@@ -23,6 +23,7 @@ from app.domain.runtime import ResearchAgentRequest, ResearchMessage
 from app.infrastructure.db import SessionLocal
 from app.infrastructure.events import event_publisher
 from app.infrastructure.llm import model_handler
+from app.infrastructure.observability import stage_span
 
 if TYPE_CHECKING:
     from app.application.agents import ResearchResult, ResearchTask
@@ -502,59 +503,74 @@ class UltraDynamicRoundCoordinator:
             return vote
 
         # reviewer 数量与 lens 从编排模板读（借鉴点 E），fallback 到默认 lens
-        configured_lenses = reviewer_lenses(state.workflow_template)
-        lens_map = {lens["key"]: lens for lens in REVIEWER_LENSES}
-        lenses = [lens_map[key] for key in configured_lenses if key in lens_map]
-        if not lenses:
-            lenses = list(REVIEWER_LENSES)
-        count = reviewer_count(state.workflow_template)
-        lenses = lenses[: max(1, min(count, len(lenses)))]
-        votes = await asyncio.gather(*(run_reviewer(lens) for lens in lenses))
+        async with stage_span("UltraDynamicReview", state) as span:
+            configured_lenses = reviewer_lenses(state.workflow_template)
+            lens_map = {lens["key"]: lens for lens in REVIEWER_LENSES}
+            lenses = [lens_map[key] for key in configured_lenses if key in lens_map]
+            if not lenses:
+                lenses = list(REVIEWER_LENSES)
+            count = reviewer_count(state.workflow_template)
+            lenses = lenses[: max(1, min(count, len(lenses)))]
+            span.set_attribute("review.lens.count", len(lenses))
+            span.set_attribute("review.continue.threshold", continue_threshold(state.workflow_template))
+            votes = await asyncio.gather(*(run_reviewer(lens) for lens in lenses))
 
-        # 聚合：达到模板阈值才 continue，否则 report（默认 refuted 倾向）
-        continue_count = sum(1 for v in votes if v.get("nextAction") == "continue")
-        threshold = continue_threshold(state.workflow_template)
-        report_count = len(votes) - continue_count
-        next_action = "continue" if continue_count >= threshold else "report"
-        if continue_count == len(votes):
-            consensus = "continue"
-        elif report_count == len(votes):
-            consensus = "report"
-        else:
-            consensus = "split"
+            # 聚合：达到模板阈值才 continue，否则 report（默认 refuted 倾向）
+            continue_count = sum(1 for v in votes if v.get("nextAction") == "continue")
+            threshold = continue_threshold(state.workflow_template)
+            report_count = len(votes) - continue_count
+            next_action = "continue" if continue_count >= threshold else "report"
+            if continue_count == len(votes):
+                consensus = "continue"
+            elif report_count == len(votes):
+                consensus = "report"
+            else:
+                consensus = "split"
 
-        # 评分合并：取各维度最低（短板原则）
-        merged_scores: dict[str, Any] = {}
-        for dim in ("coverage", "evidence", "freshness", "sourceDiversity", "consistency"):
-            dim_scores = [
-                v.get("scores", {}).get(dim)
-                for v in votes
-                if isinstance(v.get("scores", {}).get(dim), (int, float))
-            ]
-            merged_scores[dim] = min(dim_scores) if dim_scores else 1
+            # 评分合并：取各维度最低（短板原则）
+            merged_scores: dict[str, Any] = {}
+            for dim in ("coverage", "evidence", "freshness", "sourceDiversity", "consistency"):
+                dim_scores = [
+                    v.get("scores", {}).get(dim)
+                    for v in votes
+                    if isinstance(v.get("scores", {}).get(dim), (int, float))
+                ]
+                merged_scores[dim] = min(dim_scores) if dim_scores else 1
 
-        all_gaps: list[str] = []
-        for v in votes:
-            all_gaps.extend(v.get("gaps") or [])
+            all_gaps: list[str] = []
+            for v in votes:
+                all_gaps.extend(v.get("gaps") or [])
 
-        return {
-            "nextAction": next_action,
-            "strategy": f"{continue_count}/{len(votes)} 评审同意 {'继续补强' if next_action == 'continue' else '进入报告'}",
-            "deltaSummary": fallback.get("deltaSummary", ""),
-            "qualityScoreboard": merged_scores,
-            "sectionScoreboard": fallback.get("sectionScoreboard", []),
-            "sourceTypeBreakdown": fallback.get("sourceTypeBreakdown", {}),
-            "nextFocus": fallback.get("nextFocus", {}),
-            "blockingGaps": all_gaps[:5],
-            "reviewSummary": {
-                "continueVotes": continue_count,
-                "reportVotes": report_count,
-                "totalVotes": len(votes),
-                "continueThreshold": threshold,
-                "consensus": consensus,
-            },
-            "votes": votes,
-        }
+            # 决策结果落入 span 属性，支持在 Langfuse 按 nextAction / 评分维度切片 trace
+            span.set_attribute("review.next.action", next_action)
+            span.set_attribute("review.continue.votes", continue_count)
+            span.set_attribute("review.report.votes", report_count)
+            span.set_attribute("review.total.votes", len(votes))
+            span.set_attribute("review.consensus", consensus)
+            span.set_attribute("review.gaps.count", len(all_gaps[:5]))
+            for dim in ("coverage", "evidence", "freshness", "sourceDiversity", "consistency"):
+                score = merged_scores.get(dim)
+                if isinstance(score, (int, float)):
+                    span.set_attribute(f"review.score.{dim}", int(score))
+
+            return {
+                "nextAction": next_action,
+                "strategy": f"{continue_count}/{len(votes)} 评审同意 {'继续补强' if next_action == 'continue' else '进入报告'}",
+                "deltaSummary": fallback.get("deltaSummary", ""),
+                "qualityScoreboard": merged_scores,
+                "sectionScoreboard": fallback.get("sectionScoreboard", []),
+                "sourceTypeBreakdown": fallback.get("sourceTypeBreakdown", {}),
+                "nextFocus": fallback.get("nextFocus", {}),
+                "blockingGaps": all_gaps[:5],
+                "reviewSummary": {
+                    "continueVotes": continue_count,
+                    "reportVotes": report_count,
+                    "totalVotes": len(votes),
+                    "continueThreshold": threshold,
+                    "consensus": consensus,
+                },
+                "votes": votes,
+            }
 
     async def _create_round_record(
         self,

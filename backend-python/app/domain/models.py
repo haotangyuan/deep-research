@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, Integer, String, Text
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -59,7 +60,7 @@ class ChatMessage(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     research_id: Mapped[str] = mapped_column(String(32))
     role: Mapped[str] = mapped_column(String(16))
-    content: Mapped[str] = mapped_column(Text)
+    content: Mapped[str] = mapped_column(MEDIUMTEXT)
     sequence_no: Mapped[int] = mapped_column(Integer)
     create_time: Mapped[datetime | None] = mapped_column(DateTime)
 
@@ -174,7 +175,7 @@ class ResearchContextNode(Base):
     node_type: Mapped[str] = mapped_column(String(64), index=True)
     level: Mapped[str] = mapped_column(String(16), index=True)
     title: Mapped[str | None] = mapped_column(String(512))
-    content: Mapped[str | None] = mapped_column(Text)
+    content: Mapped[str | None] = mapped_column(MEDIUMTEXT)
     content_ref: Mapped[str | None] = mapped_column(String(512))
     parent_path: Mapped[str | None] = mapped_column(String(512), index=True)
     branch_index: Mapped[int | None] = mapped_column(Integer, index=True)

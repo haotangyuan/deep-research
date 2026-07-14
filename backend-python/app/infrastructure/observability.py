@@ -95,6 +95,8 @@ def _set_common(span: Span, state: Any | None) -> None:
     span.set_attribute("budget.level", _value(getattr(metadata, "budget_level", None)))
     span.set_attribute("agent.framework", _value(getattr(metadata, "agent_framework", None)))
     span.set_attribute("workflow.status", _value(getattr(state, "status", None)))
+    span.set_attribute("workflow.mode", _value(getattr(state, "workflow_mode", None)))
+    span.set_attribute("dynamic.round.no", int(getattr(state, "dynamic_round_no", 0) or 0))
 
 
 @contextmanager
@@ -147,12 +149,20 @@ async def tool_span(tool_name: str, stage: str, state: Any, span_name: str | Non
 
 
 @asynccontextmanager
-async def model_span(model_name: str, framework: str, request_summary: str | None, tool_count: int) -> AsyncIterator[Span]:
+async def model_span(
+    model_name: str,
+    framework: str,
+    request_summary: str | None,
+    tool_count: int,
+    agent_id: str | None = None,
+) -> AsyncIterator[Span]:
     with tracer().start_as_current_span(f"deep_research.model {model_name}") as span:
         span.set_attribute("gen_ai.operation.name", "chat")
         span.set_attribute("gen_ai.request.model", model_name)
         span.set_attribute("agent.framework", framework)
         span.set_attribute("gen_ai.request.tools.count", tool_count)
+        if agent_id:
+            span.set_attribute("agent.name", agent_id)
         summary = summarize(request_summary)
         if summary:
             span.set_attribute("gen_ai.request.summary", summary)
