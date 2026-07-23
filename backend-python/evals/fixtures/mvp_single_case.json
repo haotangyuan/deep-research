@@ -1,0 +1,174 @@
+{
+  "_doc": "Deep Research Eval 单题端到端 MVP 离线 Fixture。承载规格第 2 节 6 个预置问题，gold 仅用于测试断言、不喂运行时。",
+
+  "case": {
+    "case_id": "tech_comparison_demo_001",
+    "query": "对比 RAG 与 Fine-tuning 在企业知识问答场景的优劣，并给出选型建议。",
+    "task_type": "tech_comparison",
+    "language": "zh-CN",
+    "as_of_date": "2026-07-01",
+    "required_points": [
+      {"id": "cost", "description": "比较训练、推理、更新和维护成本", "weight": 2},
+      {"id": "freshness", "description": "比较知识更新方式和时效性", "weight": 3},
+      {"id": "security", "description": "比较数据安全、权限和部署风险", "weight": 2},
+      {"id": "recommendation", "description": "根据企业场景给出选型建议", "weight": 3}
+    ],
+    "explicit_constraints": {
+      "require_citations": true,
+      "audience": "enterprise_technical_decision_maker"
+    },
+    "critical_facts": [
+      {"id": "fact_rag_freshness", "description": "RAG 可通过更新外部知识库改善知识时效性"}
+    ],
+    "forbidden_claims": [
+      "Fine-tuning 可以保证模型准确记住所有企业知识"
+    ]
+  },
+
+  "run": {
+    "run_id": "run_demo_001",
+    "status": "completed",
+    "input_tokens": 12000,
+    "output_tokens": 3000,
+    "duration_ms": 180000,
+    "workflow_version": "ultra_dynamic_v1",
+    "budget_level": "HIGH",
+    "trace_id": "trace_demo_001"
+  },
+
+  "intent": {
+    "task_type": "tech_comparison",
+    "language": "zh-CN",
+    "require_citations": true,
+    "audience": "enterprise_technical_decision_maker",
+    "required_points": ["cost", "freshness", "recommendation"],
+    "constraints": {
+      "cost": true,
+      "freshness": true,
+      "security": false,
+      "recommendation": true
+    },
+    "routing": "tech_comparison",
+    "as_of_date": "2026-07-01"
+  },
+
+  "plan": {
+    "work_items": [
+      {"id": "cost", "title": "比较训练/推理/更新/维护成本", "priority": 2, "status": "completed"},
+      {"id": "freshness", "title": "比较知识更新方式与时效性", "priority": 3, "status": "completed"},
+      {"id": "security", "title": "比较数据安全、权限和部署风险", "priority": 2, "status": "completed"},
+      {"id": "recommendation", "title": "给出企业场景选型建议", "priority": 3, "status": "completed"}
+    ],
+    "priorities": ["freshness", "recommendation", "cost", "security"],
+    "status": "completed"
+  },
+
+  "tool_calls": [
+    {"tool": "tavily_search", "params": {"query": "RAG vs fine-tuning cost"}, "result": "ok", "error": null, "retry": 0},
+    {"tool": "tavily_search", "params": {"query": "RAG knowledge freshness update"}, "result": "ok", "error": null, "retry": 0},
+    {"tool": "tavily_search", "params": {"query": "fine-tuning enterprise data security"}, "result": "ok", "error": null, "retry": 0}
+  ],
+
+  "context_nodes": [
+    {"level": "L0", "path": "/", "content": "RAG vs Fine-tuning 企业知识问答选型"},
+    {"level": "L1", "path": "/cost", "content": "成本：RAG 推理成本低、更新成本低；Fine-tuning 训练成本高"},
+    {"level": "L1", "path": "/freshness", "content": "时效性：RAG 可更新外部知识库；Fine-tuning 知识冻结于训练快照"},
+    {"level": "L1", "path": "/security", "content": "安全：RAG 可控权限与部署；Fine-tuning 需把企业知识进训练集"},
+    {"level": "L1", "path": "/recommendation", "content": "建议：高频更新/强权限场景选 RAG，稳定垂域选 Fine-tuning"}
+  ],
+
+  "sources": [
+    {"source_id": "src_cost", "url": "https://example.com/rag-cost", "source_type": "article", "fetched_at": "2026-06-28", "snapshot": "RAG 推理与更新成本通常低于 Fine-tuning 的训练成本。"},
+    {"source_id": "src_fresh", "url": "https://example.com/rag-freshness", "source_type": "article", "fetched_at": "2026-06-29", "snapshot": "RAG 通过更新外部知识库可快速改善知识时效性，无需重训。"},
+    {"source_id": "src_sec", "url": "https://example.com/ft-security", "source_type": "article", "fetched_at": "2026-06-30", "snapshot": "Fine-tuning 需将企业知识纳入训练数据，存在数据泄露与权限风险。"},
+    {"source_id": "src_rec", "url": "https://example.com/selection-guide", "source_type": "article", "fetched_at": "2026-06-30", "snapshot": "高频更新、强权限管控的企业场景倾向 RAG；稳定垂域可考虑 Fine-tuning。"}
+  ],
+
+  "evidence": [
+    {"evidence_id": "ev_cost", "evidence_text": "RAG 的推理与更新成本通常低于 Fine-tuning 的训练成本。", "claim": "cost", "source_id": "src_cost", "strength": "medium"},
+    {"evidence_id": "ev_fresh", "evidence_text": "RAG 可通过更新外部知识库改善知识时效性，无需重新训练。", "claim": "freshness", "source_id": "src_fresh", "strength": "strong"},
+    {"evidence_id": "ev_sec", "evidence_text": "Fine-tuning 需将企业知识纳入训练数据，存在数据泄露与权限风险。", "claim": "security", "source_id": "src_sec", "strength": "medium"},
+    {"evidence_id": "ev_rec", "evidence_text": "高频更新、强权限管控的企业场景倾向 RAG；稳定垂域可考虑 Fine-tuning。", "claim": "recommendation", "source_id": "src_rec", "strength": "medium"}
+  ],
+
+  "review": {
+    "blocking_gaps": ["security"],
+    "score": 0.6,
+    "next_action": "add_security_evidence",
+    "lenses": ["evidence_sufficiency", "source_authority", "coverage_completeness"]
+  },
+
+  "rounds": [
+    {
+      "round_no": 1,
+      "new_sources": ["src_cost", "src_fresh", "src_rec"],
+      "new_evidence": ["ev_cost", "ev_fresh", "ev_rec"],
+      "gaps": ["security"],
+      "tokens": 8000
+    },
+    {
+      "round_no": 2,
+      "new_sources": ["src_sec"],
+      "new_evidence": ["ev_sec"],
+      "gaps": [],
+      "tokens": 4000
+    }
+  ],
+
+  "reports": {
+    "pre_consistency": "## 成本\nRAG 更新成本低。\n## 时效性\nRAG 时效好；Fine-tuning 知识冻结。\n## 安全\nFine-tuning 数据可保证模型准确记住所有企业知识，无泄露风险。\n## 建议\n高频更新场景选 RAG。",
+    "pre_consistency_claim_ids": ["claim_cost", "claim_fresh", "claim_forbidden"],
+    "consistency_messages": [
+      {"from_agent": "consistency-agent", "issue": "安全章节与建议章节矛盾：安全章节称 Fine-tuning 无泄露风险，与建议章节倾向 RAG 的强权限论点冲突；且安全章节出现禁止性结论。", "severity": "blocking"}
+    ],
+    "post_consistency": "## 成本\nRAG 更新成本低。\n## 时效性\nRAG 时效好；Fine-tuning 知识冻结。\n## 安全\nFine-tuning 需将企业知识纳入训练数据，存在数据泄露与权限风险；RAG 可控权限与部署。\n## 建议\n高频更新、强权限场景选 RAG；稳定垂域可考虑 Fine-tuning。",
+    "post_consistency_claim_ids": ["claim_cost", "claim_fresh"],
+    "pre_verification": "## 成本\nRAG 更新成本低。\n## 时效性\nRAG 时效好；Fine-tuning 知识冻结。\n## 安全\nFine-tuning 需将企业知识纳入训练数据，存在数据泄露与权限风险；RAG 可控权限与部署。\n## 建议\n高频更新、强权限场景选 RAG；稳定垂域可考虑 Fine-tuning。\n\nFine-tuning 可以保证模型准确记住所有企业知识。",
+    "pre_verification_claim_ids": ["claim_cost", "claim_fresh", "claim_forbidden"],
+    "post_verification": "## 成本\nRAG 更新成本低。\n## 时效性\nRAG 时效好；Fine-tuning 知识冻结。\n## 安全\nFine-tuning 需将企业知识纳入训练数据，存在数据泄露与权限风险；RAG 可控权限与部署。\n## 建议\n高频更新、强权限场景选 RAG；稳定垂域可考虑 Fine-tuning。",
+    "post_verification_claim_ids": ["claim_cost", "claim_fresh"],
+    "final": "## 成本\nRAG 的推理与更新成本通常低于 Fine-tuning 的训练成本。\n## 时效性\nRAG 可通过更新外部知识库改善知识时效性，无需重新训练；Fine-tuning 知识冻结于训练快照。\n## 安全\nFine-tuning 需将企业知识纳入训练数据，存在数据泄露与权限风险；RAG 可控权限与部署。\n## 建议\n高频更新、强权限管控的企业场景倾向 RAG；稳定垂域可考虑 Fine-tuning。\n\nFine-tuning 可以保证模型准确记住所有企业知识。"
+  },
+
+  "claims": [
+    {
+      "claim_id": "claim_cost",
+      "claim_text": "RAG 的推理与更新成本通常低于 Fine-tuning 的训练成本。",
+      "importance": "minor",
+      "requires_citation": true,
+      "citations": [{"citation_id": "cite_cost", "evidence_id": "ev_cost", "excerpt": "RAG 推理与更新成本通常低于 Fine-tuning 的训练成本。"}]
+    },
+    {
+      "claim_id": "claim_fresh",
+      "claim_text": "RAG 可通过更新外部知识库改善知识时效性，无需重新训练。",
+      "importance": "critical",
+      "requires_citation": true,
+      "citations": [{"citation_id": "cite_fresh", "evidence_id": "ev_fresh", "excerpt": "RAG 通过更新外部知识库可快速改善知识时效性，无需重训。"}]
+    },
+    {
+      "claim_id": "claim_forbidden",
+      "claim_text": "Fine-tuning 可以保证模型准确记住所有企业知识。",
+      "importance": "critical",
+      "requires_citation": true,
+      "citations": [{"citation_id": "cite_forbidden", "evidence_id": "ev_cost", "excerpt": "RAG 推理与更新成本通常低于 Fine-tuning 的训练成本。"}]
+    }
+  ],
+
+  "claim_verifier": [
+    {"claim_id": "claim_cost", "verdict": "verified", "reason": "证据 ev_cost 支持。", "post_action": "keep"},
+    {"claim_id": "claim_fresh", "verdict": "verified", "reason": "证据 ev_fresh 支持。", "post_action": "keep"},
+    {"claim_id": "claim_forbidden", "verdict": "unverified", "reason": "引用的证据 ev_cost 与 claim 无关，且 claim 属于禁止性结论。", "post_action": "removed"}
+  ],
+
+  "gold": {
+    "gold_support": {
+      "claim_cost": "supported",
+      "claim_fresh": "supported",
+      "claim_forbidden": "unsupported"
+    },
+    "expected_missing_constraints": ["security"],
+    "expected_unsupported_claim": "claim_forbidden",
+    "expected_consistency_resolved": true,
+    "expected_verifier_removed": ["claim_forbidden"]
+  }
+}
