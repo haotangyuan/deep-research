@@ -225,14 +225,28 @@ status 取值之一：
 - not_verifiable：无法判断（如缺 evidence 或信息不足）"""
 
 
-def _build_claim_user_prompt(claim: dict[str, Any], evidence: dict[str, Any] | None, source: dict[str, Any] | None) -> str:
+def _build_claim_user_prompt(claim: dict[str, Any], evidence: dict[str, Any] | None, source: dict[str, Any] | None, all_evidence: list[dict[str, Any]] | None = None) -> str:
+    """构造 claim 判定 prompt。
+
+    优先用 claim 明确映射的 evidence（citation↔evidence_id）；若 claim 无明确映射
+    （真实生产 claim_manifest 常见：citation 是 marker-N 文本标记，无 evidence_id），
+    则把全部 evidence 摘要喂给 LLM，由其判断 claim 是否被其中任一支持。
+    """
     parts = [f"Claim（id={claim.get('claim_id')}）: {claim.get('claim_text', '')}"]
     if evidence:
-        parts.append(f"Evidence（id={evidence.get('evidence_id')}）: {evidence.get('evidence_text', '')}")
+        parts.append(f"引用 Evidence（id={evidence.get('evidence_id')}）: {evidence.get('evidence_text', '')}")
+        if source:
+            parts.append(f"Source（id={source.get('source_id')}）: {source.get('snapshot', '')}")
+    elif all_evidence:
+        # 无明确 citation 映射，喂全部 evidence 摘要（真实生产场景）。
+        # 截断每条 + 限条数，避免 prompt 过长爆 token。
+        evs = "\n".join(
+            f"- [{e.get('evidence_id')}] {e.get('evidence_text', '')[:160]}"
+            for e in all_evidence if e.get('evidence_text')
+        )[:8000]
+        parts.append(f"可用 Evidence 池（共 {len(all_evidence)} 条，含 claim 上下文里的 Evidence N 编号）:\n{evs}")
     else:
         parts.append("Evidence: <无对应 evidence>")
-    if source:
-        parts.append(f"Source（id={source.get('source_id')}）: {source.get('snapshot', '')}")
     parts.append("判断该 claim 的支持状态，只输出 JSON。")
     return "\n".join(parts)
 
@@ -251,7 +265,7 @@ async def _judge_one_claim(claim: dict[str, Any], ctx: MvpEvalContext, chat_fn: 
     if chat_fn is None:
         return "not_verifiable", "未注入 chat_fn，无法调用 LLM 判定"
     try:
-        user_prompt = _build_claim_user_prompt(claim, evidence, source)
+        user_prompt = _build_claim_user_prompt(claim, evidence, source, all_evidence=ctx.evidence if not evidence else None)
         raw = await chat_fn(_CLAIM_SYSTEM_PROMPT, user_prompt)
     except Exception as exc:  # noqa: BLE001
         return "not_verifiable", f"LLM 调用失败：{exc}"
