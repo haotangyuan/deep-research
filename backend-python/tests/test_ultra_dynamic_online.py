@@ -17,7 +17,9 @@ def _make_state(
     round_no: int = 1,
     max_rounds: int = 3,
     conduct_count: int = 0,
+    total_conduct_count: int = 0,
     max_conduct_count: int = 6,
+    max_total_conduct_count: int = 12,
 ) -> DeepResearchState:
     return DeepResearchState(
         research_id="research-ultra",
@@ -36,11 +38,13 @@ def _make_state(
         research_brief="研究中国 AI 搜索市场的格局、商业模式与监管风险",
         budget=BudgetSnapshot(
             max_conduct_count=max_conduct_count,
+            max_total_conduct_count=max_total_conduct_count,
             max_search_count=4,
             max_concurrent_units=3,
         ),
         budget_name="ULTRA",
         conduct_count=conduct_count,
+        total_conduct_count=total_conduct_count,
     )
 
 
@@ -114,6 +118,56 @@ def test_fact_lookup_template_uses_documented_nested_schema() -> None:
     assert template["reviewer"]["count"] == 2
     assert template["report"]["draftAngles"] == ["data-driven"]
     assert template["report"]["claimVerification"] is False
+    assert template["budget"]["maxConductCount"] == 3
+    assert template["budget"]["maxTotalConductCount"] == 3
+
+
+def test_ultra_conduct_budget_resets_per_round_but_keeps_total_guardrail() -> None:
+    from app.application.agents import supervisor_agent
+
+    state = _make_state(
+        round_no=2,
+        conduct_count=0,
+        total_conduct_count=6,
+        max_conduct_count=6,
+        max_total_conduct_count=12,
+    )
+
+    assert supervisor_agent._reserve_conduct_slot(state) is True
+    assert state.conduct_count == 1
+    assert state.total_conduct_count == 7
+
+    state.conduct_count = 6
+    assert supervisor_agent._reserve_conduct_slot(state) is False
+
+    state.conduct_count = 0
+    state.total_conduct_count = 12
+    assert supervisor_agent._reserve_conduct_slot(state) is False
+
+
+def test_ultra_task_ids_are_unique_across_rounds_and_respect_remaining_total_budget() -> None:
+    from app.application.agents import supervisor_agent
+
+    response = """
+    {
+      "researchTasks": [
+        {"title": "任务一", "researchTopic": "主题一"},
+        {"title": "任务二", "researchTopic": "主题二"},
+        {"title": "任务三", "researchTopic": "主题三"}
+      ]
+    }
+    """
+    round_one = _make_state(round_no=1, total_conduct_count=0)
+    round_two = _make_state(round_no=2, total_conduct_count=10)
+
+    first_tasks = supervisor_agent._parse_research_tasks(response, round_one)
+    second_tasks = supervisor_agent._parse_research_tasks(response, round_two)
+
+    assert len(first_tasks) == 3
+    assert len(second_tasks) == 2
+    assert first_tasks[0].task_id != second_tasks[0].task_id
+    assert "round-1" in first_tasks[0].task_id
+    assert "round-2" in second_tasks[0].task_id
 
 
 def test_template_validation_rejects_unknown_or_impossible_config() -> None:

@@ -97,6 +97,11 @@ def _set_common(span: Span, state: Any | None) -> None:
     span.set_attribute("workflow.status", _value(getattr(state, "status", None)))
     span.set_attribute("workflow.mode", _value(getattr(state, "workflow_mode", None)))
     span.set_attribute("dynamic.round.no", int(getattr(state, "dynamic_round_no", 0) or 0))
+    budget = getattr(state, "budget", None)
+    span.set_attribute("budget.conduct.per_round_limit", int(getattr(budget, "max_conduct_count", 0) or 0))
+    span.set_attribute("budget.conduct.total_limit", int(getattr(budget, "total_conduct_limit", 0) or 0))
+    span.set_attribute("budget.conduct.round_used", int(getattr(state, "conduct_count", 0) or 0))
+    span.set_attribute("budget.conduct.total_used", int(getattr(state, "total_conduct_count", 0) or 0))
 
 
 @contextmanager

@@ -237,7 +237,7 @@ def build_fallback_round_decision(
     }
     can_continue = (
         state.dynamic_round_no < max(1, state.dynamic_max_rounds)
-        and state.conduct_count < state.budget.max_conduct_count
+        and state.total_conduct_count < state.budget.total_conduct_limit
     )
     weak_section_names = [item["section"] for item in weak_sections if item["status"] != "strong"]
     next_action = "continue" if (blocking_gaps or weak_section_names) and can_continue else "report"
@@ -396,6 +396,37 @@ class UltraDynamicRoundCoordinator:
         state.latest_dynamic_decision = decision
         state.dynamic_next_focus = decision.get("nextFocus") or None
         state.report_quality_context = build_report_quality_context(decision)
+        # Eval MVP v2：round_review 决策落库
+        if state.run_id:
+            import json as _json
+
+            from app.infrastructure.eval_repository import eval_repository, safe_record
+
+            decision_json = _json.dumps(decision, ensure_ascii=False, default=str)
+            scoreboard = decision.get("qualityScoreboard") or {}
+            board_scores = [
+                s for s in scoreboard.values() if isinstance(s, (int, float))
+            ]
+            # 短板原则：取各维度最低分作为总分（原 decision.get("score") 恒 None 的 bug 修复）
+            overall_score = min(board_scores) if board_scores else None
+            await safe_record(
+                lambda: eval_repository.upsert_artifact(
+                    run_id=state.run_id,
+                    research_id=state.research_id,
+                    artifact_type="round_review",
+                    stage_name="UltraDynamicReview",
+                    round_no=round_no,
+                    content=decision_json,
+                    metadata={
+                        "nextAction": decision.get("nextAction"),
+                        "score": overall_score,
+                        "blockingGaps": list(decision.get("blockingGaps") or []),
+                    },
+                    outcome="success",
+                    fallback_used=0,
+                ),
+                context=f"round_review research_id={state.research_id} round={round_no}",
+            )
         state.dynamic_round_history.append(
             {
                 "roundNo": round_no,
@@ -408,6 +439,9 @@ class UltraDynamicRoundCoordinator:
             "roundNo": round_no,
             "taskCount": len(tasks),
             "evidenceCount": len(evidence_entries),
+            "roundConductCount": state.conduct_count,
+            "totalConductCount": state.total_conduct_count,
+            "totalConductLimit": state.budget.total_conduct_limit,
             "nextAction": decision.get("nextAction"),
             "qualityScoreboard": decision.get("qualityScoreboard") or {},
         }
@@ -468,12 +502,14 @@ class UltraDynamicRoundCoordinator:
                 evidence=evidence_text,
             )
             try:
+                # Eval MVP v2：显式透传 reviewer.lens，供 LLM 阶段归因（stage_name 后缀作 fallback）
+                reviewer_context = {**state.trace_context(), "reviewer.lens": lens["key"]}
                 response = await model_handler.get_chat_client(state.research_id).run_agent(
                     ResearchAgentRequest.text_only(
                         "UltraDynamicReviewer:" + lens["key"],
                         "",
                         [ResearchMessage.user(prompt)],
-                        state.trace_context(),
+                        reviewer_context,
                     ),
                 )
                 state.add_token_usage(response.token_usage)
@@ -552,6 +588,39 @@ class UltraDynamicRoundCoordinator:
                 score = merged_scores.get(dim)
                 if isinstance(score, (int, float)):
                     span.set_attribute(f"review.score.{dim}", int(score))
+
+            # trace 标量本地落地（observability 导出 Langfuse 的同时落 research_span_attribute，
+            # 供 eval 读取机制指标；set_attribute 调用一个不删，Langfuse 导出不受影响）。
+            # 复用已算的局部变量，不重复计算；与 round_review artifact metadata 严格分工：
+            # votes/consensus/各维度分只在本表存一份，artifact metadata 不重复落库。
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                review_attrs = {
+                    "review.next.action": next_action,
+                    "review.continue.votes": continue_count,
+                    "review.report.votes": report_count,
+                    "review.total.votes": len(votes),
+                    "review.consensus": consensus,
+                    "review.lens.count": len(lenses),
+                    "review.continue.threshold": threshold,
+                    "review.gaps.count": len(all_gaps[:5]),
+                }
+                for dim in ("coverage", "evidence", "freshness", "sourceDiversity", "consistency"):
+                    dim_score = merged_scores.get(dim)
+                    if isinstance(dim_score, (int, float)):
+                        review_attrs[f"review.score.{dim}"] = int(dim_score)
+                await safe_record(
+                    lambda: eval_repository.upsert_span_attributes(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        trace_id=state.run_trace_id,
+                        span_scope="UltraDynamicReview",
+                        round_no=round_no,
+                        attrs=review_attrs,
+                    ),
+                    context=f"span_attribute review research_id={state.research_id} round={round_no}",
+                )
 
             return {
                 "nextAction": next_action,

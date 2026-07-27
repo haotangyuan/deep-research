@@ -65,8 +65,15 @@ class ReportTemplate(BaseModel):
 
 class BudgetTemplate(BaseModel):
     maxConductCount: int = Field(default=6, ge=1)
+    maxTotalConductCount: int = Field(default=12, ge=1)
     maxSearchCount: int = Field(default=4, ge=1)
     maxConcurrentUnits: int = Field(default=3, ge=1)
+
+    @model_validator(mode="after")
+    def validate_total_conduct_budget(self) -> "BudgetTemplate":
+        if self.maxTotalConductCount < self.maxConductCount:
+            raise ValueError("maxTotalConductCount cannot be lower than maxConductCount")
+        return self
 
 
 class InterventionTemplate(BaseModel):
@@ -128,6 +135,15 @@ def normalize_template(template: dict[str, Any]) -> dict[str, Any]:
 
     budget = dict(normalized.get("budget") or {})
     budget.setdefault("maxConductCount", int(normalized.get("maxConductCount", 6)))
+    budget.setdefault(
+        "maxTotalConductCount",
+        int(
+            normalized.get(
+                "maxTotalConductCount",
+                budget["maxConductCount"] * min(int(normalized.get("maxRounds", 5)), 2),
+            ),
+        ),
+    )
     budget.setdefault("maxSearchCount", int(normalized.get("maxSearchCount", 4)))
     budget.setdefault("maxConcurrentUnits", int(normalized.get("maxConcurrentUnits", 3)))
     normalized["budget"] = budget
@@ -138,6 +154,22 @@ def normalize_template(template: dict[str, Any]) -> dict[str, Any]:
         return UltraWorkflowTemplate.model_validate(normalized).model_dump(mode="json")
     except ValidationError as exc:
         raise ValueError("invalid ultra workflow template: " + str(exc)) from exc
+
+
+def template_sha256(template: dict[str, Any] | None) -> str:
+    """规范化后的 workflow template 的 sha256。
+
+    先 ``normalize_template`` 再 hash，避免旧扁平字段/字段顺序影响哈希稳定性。
+    用于 ``research_run.template_sha256``（见 v2 §6.11）。
+    """
+    import hashlib
+
+    if not template:
+        return hashlib.sha256(b"").hexdigest()
+    normalized = normalize_template(template)
+    payload = json.dumps(normalized, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
 
 
 def reviewer_count(template: dict[str, Any] | None) -> int:
@@ -209,6 +241,10 @@ def template_budget(template: dict[str, Any] | None) -> dict[str, int]:
         budget = {}
     return {
         "max_conduct_count": max(1, int(budget.get("maxConductCount", 6))),
+        "max_total_conduct_count": max(
+            1,
+            int(budget.get("maxTotalConductCount", budget.get("maxConductCount", 6))),
+        ),
         "max_search_count": max(1, int(budget.get("maxSearchCount", 4))),
         "max_concurrent_units": max(1, int(budget.get("maxConcurrentUnits", 3))),
     }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from datetime import timedelta
 
 from sqlalchemy import select, text
@@ -15,18 +16,21 @@ from app.application.interventions import (
     is_ultra_dynamic_budget,
 )
 from app.application.ultra_dynamic import build_report_quality_context, render_report_quality_markdown
-from app.infrastructure.cache import get_cache, sequence_util
 from app.core.config import get_settings
 from app.core.constants import EventType, WorkflowMode, WorkflowStatus
-from app.infrastructure.db import SessionLocal
-from app.infrastructure.events import event_publisher
-from app.infrastructure.llm import model_handler
-from app.infrastructure.observability import stage_span, summarize, workflow_span
-from app.infrastructure.sse import sse_hub
+from app.core.prompt_registry import freeze_for_state
+from app.core.timeutil import now_local
 from app.domain.models import ChatMessage, Model, ResearchSession
 from app.domain.runtime import ResearchMessage
 from app.domain.state import BudgetSnapshot, DeepResearchState, TraceMetadataModel
-from app.core.timeutil import now_local
+from app.infrastructure.cache import get_cache, sequence_util
+from app.infrastructure.db import SessionLocal
+from app.infrastructure.events import event_publisher
+from app.infrastructure.eval_repository import eval_repository, safe_record
+from app.infrastructure.llm import model_handler
+from app.infrastructure.observability import stage_span, summarize, workflow_span
+from app.infrastructure.sse import sse_hub
+from app.application.eval_snapshot import enqueue_snapshot
 
 
 INTERRUPTED_RUNNING_STATUSES = {
@@ -39,6 +43,118 @@ INTERRUPTED_RUNNING_STATUSES = {
 CONFIRMED_DIRECTION_MESSAGE = "确认研究方向，开始执行研究"
 REVISE_DIRECTION_PREFIX = "修改意见:"
 REVISE_DIRECTION_FALLBACK = "请重新调整研究方向"
+
+
+# Eval MVP v2：resume_status → trigger_type 映射（见 v2 §6.1）
+_TRIGGER_MAP = {
+    WorkflowStatus.QUEUE: "initial",
+    WorkflowStatus.START: "initial",
+    WorkflowStatus.FAILED: "retry",
+    WorkflowStatus.CANCELLED: "retry",
+    WorkflowStatus.AWAITING_DIRECTION_CONFIRM: "hitl_resume",
+    WorkflowStatus.NEED_CLARIFICATION: "clarify_resume",
+    WorkflowStatus.IN_RESEARCH: "checkpoint_resume",
+    WorkflowStatus.IN_REPORT: "checkpoint_resume",
+}
+
+
+def _derive_outcome(status: str | None, report_quality_context: dict | None) -> str:
+    """终态 status → run outcome（对齐 pipeline.py:651 的 degraded 判定）。"""
+    if status == WorkflowStatus.COMPLETED:
+        if report_quality_context and report_quality_context.get("status") != "ready":
+            return "degraded"
+        return "success"
+    if status == WorkflowStatus.FAILED:
+        return "failed"
+    if status == WorkflowStatus.CANCELLED:
+        return "cancelled"
+    if status in (WorkflowStatus.AWAITING_DIRECTION_CONFIRM, WorkflowStatus.NEED_CLARIFICATION):
+        return "hitl_wait"
+    return "success"
+
+
+def _capture_trace_id() -> str | None:
+    """取当前 OTel span 的 trace_id（必须在 workflow_span 内调用）。"""
+    try:
+        import opentelemetry.trace as otel_trace
+
+        span = otel_trace.get_current_span()
+        ctx = span.get_span_context() if span is not None else None
+        if ctx is not None and getattr(ctx, "trace_id", 0):
+            return f"{ctx.trace_id:032x}"
+    except Exception:  # noqa: BLE001 — 观测未初始化时返回 None
+        return None
+    return None
+
+
+async def _open_run(state: DeepResearchState, trigger_type: str) -> None:
+    """run 开场：捕获 trace_id、取 attempt_no、create_run、写 user_query artifact。
+
+    全程 try/except 吞异常（v2 §0.3 红线 2），失败仅日志，不阻塞研究。
+    """
+    research_id = state.research_id
+    try:
+        state.run_trace_id = _capture_trace_id()
+        state.run_trigger_type = trigger_type
+        attempt_no = await eval_repository.next_attempt_no(research_id)
+        version_snapshot = freeze_for_state(state)
+        run_id = await eval_repository.create_run(
+            research_id, attempt_no, trigger_type, version_snapshot, state
+        )
+        state.run_id = run_id
+        state.run_attempt_no = attempt_no
+        state.run_version_snapshot = version_snapshot
+        state.run_start_input_tokens = state.total_input_tokens
+        state.run_start_output_tokens = state.total_output_tokens
+        state.run_start_perf_ts = time.perf_counter()
+        # user_query artifact
+        user_text = state.chat_history[-1].text if state.chat_history else ""
+        await safe_record(
+            lambda: eval_repository.upsert_artifact(
+                run_id=run_id,
+                research_id=research_id,
+                artifact_type="user_query",
+                stage_name="Pipeline",
+                round_no=0,
+                content=user_text,
+                outcome="success",
+                fallback_used=0,
+            ),
+            context=f"user_query research_id={research_id}",
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("open_run failed research_id=%s", research_id)
+
+
+async def _close_run(state: DeepResearchState) -> None:
+    """run 收尾：close_run + reconcile_tokens。仅在 finally 调用，吞异常。"""
+    if not state.run_id:
+        return
+    try:
+        outcome = _derive_outcome(state.status, state.report_quality_context)
+        active_ms = (
+            int((time.perf_counter() - state.run_start_perf_ts) * 1000)
+            if state.run_start_perf_ts
+            else None
+        )
+        run_input = state.total_input_tokens - state.run_start_input_tokens
+        run_output = state.total_output_tokens - state.run_start_output_tokens
+        await eval_repository.close_run(
+            state.run_id,
+            outcome,
+            state,
+            end_time=now_local(),
+            active_ms=active_ms,
+            wall_ms=active_ms,
+            run_input=run_input,
+            run_output=run_output,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("close_run failed research_id=%s run_id=%s", state.research_id, state.run_id)
+    try:
+        await eval_repository.reconcile_tokens(state.run_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("reconcile_tokens failed run_id=%s", state.run_id)
 
 
 def should_rebuild_scope_from_latest_user(latest_user_text: str) -> bool:
@@ -342,11 +458,14 @@ class AgentPipeline:
     async def _run_now(self, state: DeepResearchState) -> None:
         research_id = state.research_id
         resume_status = state.status
+        trigger_type = _TRIGGER_MAP.get(resume_status, "initial")
         try:
             if await is_cancelled(research_id):
                 state.status = WorkflowStatus.CANCELLED
                 return
             with workflow_span(state):
+                # Eval MVP v2：run 开场（trace_id 必须在 workflow_span 内捕获）
+                await _open_run(state, trigger_type)
                 state.status = WorkflowStatus.START
                 await update_research_session(research_id, WorkflowStatus.START, state)
 
@@ -430,6 +549,10 @@ class AgentPipeline:
             )
             await update_research_session(research_id, WorkflowStatus.FAILED, state)
         finally:
+            # Eval MVP v2：run 收尾（close_run + reconcile_tokens），吞异常不阻塞
+            await _close_run(state)
+            # Eval MVP v2 Commit 6b：异步冻结 Candidate Snapshot（仅 success/degraded）
+            await enqueue_snapshot(state)
             try:
                 sequence_util.reset(research_id)
                 await sse_hub.complete(research_id, state.status)
@@ -485,12 +608,10 @@ class AgentPipeline:
         research_id = state.research_id
         # 意图识别 + 模板选择（借鉴点 E）：scope 后按 researchType 选模板
         if not state.workflow_template:
-            from app.application.workflow_template import select_template, template_budget
+            from app.application.workflow_template import select_template
 
             template = select_template(state.research_type, state.research_type_confidence)
             state.workflow_template = template
-            state.dynamic_max_rounds = int(template.get("maxRounds", state.dynamic_max_rounds))
-            state.budget = state.budget.model_copy(update=template_budget(template))
             await event_publisher.publish_event(
                 research_id,
                 EventType.AGENT_RUNTIME,
@@ -498,6 +619,12 @@ class AgentPipeline:
                 json.dumps({"kind": "workflow_template", "template": template}, ensure_ascii=False),
                 state.current_supervisor_event_id,
             )
+        from app.application.workflow_template import template_budget
+
+        # Re-apply persisted template limits after checkpoint/resume. The
+        # service-level budget only contains the tier defaults.
+        state.dynamic_max_rounds = int(state.workflow_template.get("maxRounds", state.dynamic_max_rounds))
+        state.budget = state.budget.model_copy(update=template_budget(state.workflow_template))
         while True:
             if await is_cancelled(research_id):
                 state.status = WorkflowStatus.CANCELLED
@@ -506,6 +633,10 @@ class AgentPipeline:
 
             state.status = WorkflowStatus.IN_RESEARCH
             state.dynamic_round_no += 1
+            # Per-round and run-level budgets are deliberately independent.
+            # Reset only the round counter; total_conduct_count remains the
+            # cost guardrail across all ULTRA rounds.
+            state.conduct_count = 0
             await update_research_session(research_id, WorkflowStatus.IN_RESEARCH, state)
             await save_workflow_checkpoint(state)
             async with stage_span("SupervisorAgent", state):
@@ -533,7 +664,7 @@ class AgentPipeline:
 
             pending = await has_pending_intervention(research_id)
             continue_for_decision = bool((state.latest_dynamic_decision or {}).get("nextAction") == "continue")
-            if state.conduct_count >= state.budget.max_conduct_count:
+            if state.total_conduct_count >= state.budget.total_conduct_limit:
                 if pending:
                     await expire_pending_interventions(research_id, "研究任务预算已耗尽，未能继续追加下一轮规划。", "budget_exhausted")
                     await event_publisher.publish_event(
@@ -632,6 +763,33 @@ class AgentPipeline:
             span.set_attribute("report.quality.status", str(context.get("status") or ""))
             span.set_attribute("report.weak.sections.count", len(context.get("weakSections") or []))
             span.set_attribute("report.blocking.gaps.count", len(context.get("blockingGaps") or []))
+            # trace 标量本地落地（observability 导出 Langfuse 的同时落 research_span_attribute，
+            # 供 eval 读取 report quality 摘要；set_attribute 不删，Langfuse 导出不受影响）。
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                weak_sections = context.get("weakSections") or []
+                blocking_gaps = context.get("blockingGaps") or []
+                gate_attrs = {
+                    "report.quality.status": str(context.get("status") or ""),
+                    "report.weak.sections.count": len(weak_sections),
+                    "report.blocking.gaps.count": len(blocking_gaps),
+                }
+                if weak_sections:
+                    gate_attrs["report.weak.sections"] = weak_sections
+                if blocking_gaps:
+                    gate_attrs["report.blocking.gaps"] = blocking_gaps
+                await safe_record(
+                    lambda: eval_repository.upsert_span_attributes(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        trace_id=state.run_trace_id,
+                        span_scope="UltraReportGate",
+                        round_no=0,
+                        attrs=gate_attrs,
+                    ),
+                    context=f"span_attribute report_gate research_id={state.research_id}",
+                )
             title = "报告前验证通过" if context.get("status") == "ready" else "报告前验证未完全通过"
             await event_publisher.publish_event(
                 state.research_id,

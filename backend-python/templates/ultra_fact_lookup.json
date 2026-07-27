@@ -20,6 +20,7 @@
   },
   "budget": {
     "maxConductCount": 3,
+    "maxTotalConductCount": 3,
     "maxSearchCount": 3,
     "maxConcurrentUnits": 2
   }

@@ -10,9 +10,22 @@ from app.domain.runtime import ResearchMessage, ResearchTokenUsage
 
 
 class BudgetSnapshot(BaseModel):
+    """Research budget.
+
+    ``max_conduct_count`` is the per-round branch limit. ULTRA may execute
+    multiple rounds, so ``max_total_conduct_count`` is a separate run-level
+    guardrail. Fixed workflows omit it and retain the historical single-round
+    behavior.
+    """
+
     max_conduct_count: int
     max_search_count: int
     max_concurrent_units: int
+    max_total_conduct_count: int | None = None
+
+    @property
+    def total_conduct_limit(self) -> int:
+        return max(1, int(self.max_total_conduct_count or self.max_conduct_count))
 
 
 class TraceMetadataModel(BaseModel):
@@ -96,6 +109,7 @@ class DeepResearchState(BaseModel):
 
     supervisor_iterations: int = 0
     conduct_count: int = 0
+    total_conduct_count: int = 0
     supervisor_notes: list[str] = Field(default_factory=list)
 
     research_topic: str | None = None
@@ -129,6 +143,20 @@ class DeepResearchState(BaseModel):
     agent_task_id: str | None = None
     agent_runtime_snapshot: dict[str, Any] | None = None
 
+    # --- Eval MVP v2 落库链路 run 字段 ---
+    # 见 docs/deep-research-eval-mvp-v2-tier-mechanism.md §6.1。
+    # 全部带默认值，旧 checkpoint 经 model_validate 可安全加载。
+    # 每次 _run_now（retry/resume）新建一组；fork_for_research/fork_for_search
+    # 必须传播它们，否则子状态 LLM 调用拿不到 run.id → 跳过记录 → 漏计。
+    run_id: str | None = None
+    run_attempt_no: int | None = None
+    run_trace_id: str | None = None
+    run_trigger_type: str | None = None
+    run_version_snapshot: dict[str, Any] | None = None
+    run_start_input_tokens: int = 0
+    run_start_output_tokens: int = 0
+    run_start_perf_ts: float | None = None
+
     @property
     def trace_metadata(self) -> ResearchTraceMetadata:
         return self.trace_metadata_model.to_trace_metadata()
@@ -143,7 +171,19 @@ class DeepResearchState(BaseModel):
             "agent.framework": meta.agent_framework,
             "agent.worker.id": self.agent_worker_id,
             "agent.task.id": self.agent_task_id,
+            "budget.conduct.per_round_limit": self.budget.max_conduct_count,
+            "budget.conduct.total_limit": self.budget.total_conduct_limit,
+            "budget.conduct.round_used": self.conduct_count,
+            "budget.conduct.total_used": self.total_conduct_count,
+            # Eval MVP v2：LLM 阶段归因维度
+            "research.round.no": self.dynamic_round_no,
+            "run.id": self.run_id,
+            "run.attempt": self.run_attempt_no,
         }
+
+    @property
+    def remaining_total_conduct_slots(self) -> int:
+        return max(0, self.budget.total_conduct_limit - self.total_conduct_count)
 
     def fork_for_research(
         self,
@@ -173,6 +213,8 @@ class DeepResearchState(BaseModel):
             workflow_template=self.workflow_template,
             budget=self.budget,
             budget_name=self.budget_name,
+            conduct_count=self.conduct_count,
+            total_conduct_count=self.total_conduct_count,
             current_supervisor_event_id=self.current_supervisor_event_id,
             current_research_event_id=research_event_id,
             research_topic=topic,
@@ -187,6 +229,15 @@ class DeepResearchState(BaseModel):
             total_output_tokens=0,
             agent_worker_id=worker_id,
             agent_task_id=task_id,
+            # Eval MVP v2：子状态复用父 run 的 run_*，保证 LLM 调用归因到正确 run。
+            run_id=self.run_id,
+            run_attempt_no=self.run_attempt_no,
+            run_trace_id=self.run_trace_id,
+            run_trigger_type=self.run_trigger_type,
+            run_version_snapshot=self.run_version_snapshot,
+            run_start_input_tokens=self.run_start_input_tokens,
+            run_start_output_tokens=self.run_start_output_tokens,
+            run_start_perf_ts=self.run_start_perf_ts,
         )
 
     def fork_for_search(self, query: str, max_results: int, topic: str) -> "DeepResearchState":
@@ -208,6 +259,8 @@ class DeepResearchState(BaseModel):
             research_brief=self.research_brief,
             budget=self.budget,
             budget_name=self.budget_name,
+            conduct_count=self.conduct_count,
+            total_conduct_count=self.total_conduct_count,
             research_topic=self.research_topic,
             current_supervisor_event_id=self.current_supervisor_event_id,
             current_research_event_id=self.current_research_event_id,
@@ -222,6 +275,15 @@ class DeepResearchState(BaseModel):
             total_output_tokens=0,
             agent_worker_id=self.agent_worker_id,
             agent_task_id=self.agent_task_id,
+            # Eval MVP v2：search 子状态复用父 run 的 run_*。
+            run_id=self.run_id,
+            run_attempt_no=self.run_attempt_no,
+            run_trace_id=self.run_trace_id,
+            run_trigger_type=self.run_trigger_type,
+            run_version_snapshot=self.run_version_snapshot,
+            run_start_input_tokens=self.run_start_input_tokens,
+            run_start_output_tokens=self.run_start_output_tokens,
+            run_start_perf_ts=self.run_start_perf_ts,
         )
 
     def add_token_usage(self, token_usage: ResearchTokenUsage | None) -> None:

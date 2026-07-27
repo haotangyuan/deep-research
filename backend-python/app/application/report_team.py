@@ -341,6 +341,29 @@ class ReportSectionTeam:
                 claims=claims,
                 metadata={"requests": payload.get("requests") if isinstance(payload, dict) else []},
             )
+            # Eval MVP v2 Commit 4：ULTRA 章节初稿落库（section_id 维度）
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                _draft = draft
+                await safe_record(
+                    lambda: eval_repository.upsert_artifact(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        artifact_type="report_section_draft",
+                        stage_name=f"ReportSectionAgent:{spec.section_id}",
+                        round_no=state.dynamic_round_no,
+                        section_id=spec.section_id,
+                        content=_draft,
+                        outcome="success",
+                        metadata={
+                            "section_title": spec.title,
+                            "claim_count": len(claims),
+                            "raw_source_count": len(raw_paths),
+                        },
+                    ),
+                    context=f"report_section_draft section={spec.section_id} research_id={state.research_id}",
+                )
             await self._write_text_node(
                 state,
                 f"sections/{spec.section_id}/draft.md",
@@ -569,6 +592,7 @@ class ReportSectionTeam:
                     agent_id=artifact.spec.section_id,
                 )
                 artifact.revision = revision.strip() or artifact.draft
+                revision_fallback = 0
             except Exception:
                 logger.exception(
                     "report section revision failed research_id=%s section=%s",
@@ -576,6 +600,31 @@ class ReportSectionTeam:
                     artifact.spec.section_id,
                 )
                 artifact.revision = artifact.draft
+                revision_fallback = 1
+            # Eval MVP v2 Commit 4：ULTRA 章节修订落库（fallback 时 content=原 draft、fallback_used=1）
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                _revision = artifact.final_text
+                _fb = revision_fallback
+                await safe_record(
+                    lambda: eval_repository.upsert_artifact(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        artifact_type="report_section_revision",
+                        stage_name=f"ReportSectionReviser:{artifact.spec.section_id}",
+                        round_no=state.dynamic_round_no,
+                        section_id=artifact.spec.section_id,
+                        content=_revision,
+                        outcome="fallback_to_draft" if _fb else "success",
+                        fallback_used=_fb,
+                        metadata={
+                            "peer_claim_count": len(peer_claims),
+                            "mailbox_count": len(mailbox),
+                        },
+                    ),
+                    context=f"report_section_revision section={artifact.spec.section_id} research_id={state.research_id}",
+                )
             await self._write_text_node(
                 state,
                 f"sections/{artifact.spec.section_id}/revision.md",
@@ -603,6 +652,28 @@ class ReportSectionTeam:
                 sections=sections,
             )
             report = await self._call(state, "ReportAgent:merge", prompt, agent_id="report-merger")
+            # Eval MVP v2 Commit 4：ULTRA 合并报告落库（与 report_final 区分：此处是 merge 产物）
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                _merged = report
+                _section_ids = [a.spec.section_id for a in artifacts]
+                await safe_record(
+                    lambda: eval_repository.upsert_artifact(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        artifact_type="report_merged",
+                        stage_name="ReportAgent:merge",
+                        round_no=state.dynamic_round_no,
+                        content=_merged,
+                        outcome="success",
+                        metadata={
+                            "section_count": len(artifacts),
+                            "section_ids": _section_ids,
+                        },
+                    ),
+                    context=f"report_merged research_id={state.research_id}",
+                )
             await self._write_text_node(
                 state,
                 "final.md",
@@ -613,7 +684,8 @@ class ReportSectionTeam:
             return report
 
     async def _call(self, state: DeepResearchState, stage: str, prompt: str, *, agent_id: str) -> str:
-        runtime_context = {**state.trace_context(), "report.agent.id": agent_id}
+        # report.section.id 用于 Eval MVP v2 的 LLM 阶段归因；保留 report.agent.id 兼容旧消费者
+        runtime_context = {**state.trace_context(), "report.agent.id": agent_id, "report.section.id": agent_id}
         response = await model_handler.get_chat_client(state.research_id).run_agent(
             ResearchAgentRequest.text_only(
                 stage,

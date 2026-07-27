@@ -186,6 +186,23 @@ class ScopeAgent:
             )
             state.research_question = question
             state.research_brief = research_brief
+            # Eval MVP v2：research_brief 落库
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                await safe_record(
+                    lambda: eval_repository.upsert_artifact(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        artifact_type="research_brief",
+                        stage_name="ScopeAgent",
+                        round_no=0,
+                        content=research_brief,
+                        outcome="success",
+                        fallback_used=0,
+                    ),
+                    context=f"research_brief research_id={state.research_id}",
+                )
             # 意图识别：解析研究类型（借鉴点 E，零额外 LLM 调用）
             research_type = str(question.get("researchType") or "general").strip().lower()
             try:
@@ -358,7 +375,12 @@ class SupervisorAgent:
         return tasks
 
     def _parse_research_tasks(self, response_text: str, state: DeepResearchState) -> list["ResearchTask"]:
-        max_count = max(1, state.budget.max_conduct_count)
+        max_count = max(
+            0,
+            min(state.budget.max_conduct_count, state.remaining_total_conduct_slots),
+        )
+        if max_count <= 0:
+            return []
         try:
             root = extract_json(response_text)
             nodes = root.get("researchTasks")
@@ -375,13 +397,14 @@ class SupervisorAgent:
                     continue
                 title = str(node.get("title") or "").strip() or f"研究任务 {len(tasks) + 1}"
                 index = len(tasks)
+                round_no = max(1, state.dynamic_round_no)
                 tasks.append(
                     ResearchTask(
                         index,
                         title,
                         topic,
-                        f"{state.research_id}-task-{index}",
-                        f"researcher-{index + 1}",
+                        f"{state.research_id}-round-{round_no}-task-{index}",
+                        f"researcher-r{round_no}-{index + 1}",
                     ),
                 )
             return tasks or self._fallback_research_tasks(state)
@@ -389,13 +412,14 @@ class SupervisorAgent:
             return self._fallback_research_tasks(state)
 
     def _fallback_research_tasks(self, state: DeepResearchState) -> list["ResearchTask"]:
+        round_no = max(1, state.dynamic_round_no)
         return [
             ResearchTask(
                 0,
                 "综合研究",
                 state.research_brief or "",
-                f"{state.research_id}-task-0",
-                "researcher-1",
+                f"{state.research_id}-round-{round_no}-task-0",
+                f"researcher-r{round_no}-1",
             ),
         ]
 
@@ -519,7 +543,10 @@ class SupervisorAgent:
     def _reserve_conduct_slot(self, state: DeepResearchState) -> bool:
         if state.conduct_count >= state.budget.max_conduct_count:
             return False
+        if state.total_conduct_count >= state.budget.total_conduct_limit:
+            return False
         state.conduct_count += 1
+        state.total_conduct_count += 1
         return True
 
     @staticmethod
@@ -635,6 +662,7 @@ class ResearcherAgent:
                 branch_index=branch_index_from_task_id(state.agent_task_id),
                 round_no=state.dynamic_round_no,
                 search_results=list(search_state.search_results.values()),
+                state=state,
             )
         except Exception:
             logger.exception("write search context failed research_id=%s query=%s", state.research_id, query)
@@ -693,6 +721,7 @@ class ResearcherAgent:
                     research_id=state.research_id,
                     round_no=state.dynamic_round_no,
                     package=state.branch_evidence_package,
+                    state=state,
                 )
             except Exception:
                 logger.exception("write branch evidence context failed research_id=%s", state.research_id)
@@ -1128,6 +1157,51 @@ class ReportAgent:
                     state.trace_metadata_model.model_id,
                 )
         await event_publisher.publish_event(state.research_id, EventType.REPORT, complete_title, None)
+        # Eval MVP v2：report_final 落库（state.report 已终态、即将 publish 的唯一收口点）
+        report_artifact_id: str | None = None
+        if state.run_id and state.report:
+            from app.infrastructure.eval_repository import eval_repository, safe_record
+
+            report_text = state.report
+            try:
+                report_artifact_id = await eval_repository.upsert_artifact(
+                    run_id=state.run_id,
+                    research_id=state.research_id,
+                    artifact_type="report_final",
+                    stage_name="ReportAgent.run",
+                    round_no=state.dynamic_round_no,
+                    content=report_text,
+                    outcome="success",
+                    fallback_used=0,
+                )
+            except Exception:
+                logger.exception(
+                    "report_final persist failed research_id=%s run_id=%s",
+                    state.research_id,
+                    state.run_id,
+                )
+            # Eval MVP v2 Commit 5：Claim-Citation Manifest 落库
+            # 从终态 report Markdown 提取 claim-citation 对，与 report_final artifact 关联。
+            # report_artifact_id 可能为 None（upsert 失败时）——write_claim_manifest 接受 None。
+            try:
+                from app.application.claim_manifest import extract_claims_from_report
+
+                claims = extract_claims_from_report(report_text)
+                if claims:
+                    await safe_record(
+                        lambda: eval_repository.write_claim_manifest(
+                            state.run_id,
+                            state.research_id,
+                            report_artifact_id,
+                            claims,
+                        ),
+                        context=f"claim_manifest research_id={state.research_id}",
+                    )
+            except Exception:
+                logger.exception(
+                    "claim manifest extraction failed research_id=%s",
+                    state.research_id,
+                )
         await event_publisher.publish_message(state.research_id, "assistant", state.report)
         return state.report
 
@@ -1188,9 +1262,48 @@ class ReportAgent:
                 ),
             )
             state.add_token_usage(response.token_usage)
-            return response.ai_message.text
+            synthesis_text = response.ai_message.text
+            # Eval MVP v2 Commit 4：HIGH Synthesis 落库（融合 comparative+data-driven）
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                _captured = synthesis_text
+                await safe_record(
+                    lambda: eval_repository.upsert_artifact(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        artifact_type="report_synthesis",
+                        stage_name="ReportAgent:high-synthesis",
+                        round_no=state.dynamic_round_no,
+                        content=_captured,
+                        outcome="success",
+                        metadata={"angles": ["comparative", "data-driven"]},
+                    ),
+                    context=f"report_synthesis research_id={state.research_id}",
+                )
+            return synthesis_text
         except Exception:
             logger.exception("HIGH report synthesis failed, fallback to comparative draft")
+            # Eval MVP v2 Commit 4：fallback 仍留存前序 Draft（已由 _draft_by_angle 落库）；
+            # 这里把 fallback 标记写入 synthesis artifact，便于后续 Synthesis Uplift 分析区分。
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                _fallback = draft_by_key["comparative"]
+                await safe_record(
+                    lambda: eval_repository.upsert_artifact(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        artifact_type="report_synthesis",
+                        stage_name="ReportAgent:high-synthesis",
+                        round_no=state.dynamic_round_no,
+                        content=_fallback,
+                        outcome="fallback",
+                        fallback_used=1,
+                        metadata={"fallback_type": "comparative_draft"},
+                    ),
+                    context=f"report_synthesis fallback research_id={state.research_id}",
+                )
             return draft_by_key["comparative"]
 
     @staticmethod
@@ -1300,7 +1413,28 @@ class ReportAgent:
                 ),
             )
             state.add_token_usage(response.token_usage)
-            return response.ai_message.text
+            draft_text = response.ai_message.text
+            # Eval MVP v2 Commit 4：HIGH 双 Draft / ULTRA 多角度 Draft 落库
+            # angle['key'] 区分 comparative/data-driven/narrative；stage_name 与 run_agent 入口一致。
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                _captured = draft_text
+                await safe_record(
+                    lambda: eval_repository.upsert_artifact(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        artifact_type="report_draft",
+                        stage_name="ReportAgent:" + angle["key"],
+                        round_no=state.dynamic_round_no,
+                        angle=angle["key"],
+                        content=_captured,
+                        outcome="success",
+                        metadata={"angle_desc": angle.get("desc")},
+                    ),
+                    context=f"report_draft angle={angle['key']} research_id={state.research_id}",
+                )
+            return draft_text
         except Exception:
             logger.exception("report draft failed angle=%s", angle["key"])
             return None
@@ -1432,6 +1566,30 @@ class ReportAgent:
                     verdict = {"verdict": "unverified"}
             except Exception:
                 verdict = {"verdict": "unverified"}
+            # Eval MVP v2 Commit 5：单 claim 验证结果落库（report_phase=claim_verify）
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                _claim = claim
+                _verdict = verdict
+                await safe_record(
+                    lambda: eval_repository.upsert_artifact(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        artifact_type="claim_verification",
+                        stage_name="ClaimVerifier",
+                        agent_name="ClaimVerifier",
+                        round_no=state.dynamic_round_no,
+                        content=_claim[:500],
+                        outcome=_verdict.get("verdict", "unverified"),
+                        metadata={
+                            "claim": _claim[:500],
+                            "verdict": _verdict.get("verdict"),
+                            "scores": _verdict.get("scores", {}),
+                        },
+                    ),
+                    context=f"claim_verification research_id={state.research_id}",
+                )
             return claim, verdict
 
         results = await asyncio.gather(*(verify_one(c) for c in claims_to_verify))

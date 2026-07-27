@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import time
+import uuid
 from typing import Any
 
 from agentscope.agent import Agent, ReActConfig
@@ -17,9 +18,12 @@ from agentscope.tool import ToolBase, ToolChunk, Toolkit
 
 from app.core.config import get_settings
 from app.core.constants import EventType
+from app.core.llm_attribution import attribution_from_request, resolve_run_id
+from app.core.timeutil import now_local
 from app.domain.models import Model
 from app.infrastructure.agentscope_runtime import AgentScopeRuntimeSession
 from app.infrastructure.events import event_publisher
+from app.infrastructure.eval_repository import eval_repository, safe_record
 from app.infrastructure.observability import model_span
 from app.domain.runtime import (
     ResearchAgentRequest,
@@ -101,8 +105,12 @@ class AgentScopeChatClient:
     async def run_agent(self, request: ResearchAgentRequest) -> ResearchChatResponse:
         request_summary = render_messages(request.messages)
         started_at = time.perf_counter()
+        call_start = now_local()
+        llm_call_id = uuid.uuid4().hex
         runtime_key, entry = self._runtime_entry(request)
         before = entry.metrics.copy()
+        run_id = resolve_run_id(request.runtime_context)
+        attribution = attribution_from_request(request)
         async with model_span(
             self.model_name,
             self.framework,
@@ -110,9 +118,10 @@ class AgentScopeChatClient:
             len(request.tool_specifications),
             request.stage_name,
         ) as span:
+            attempt_no = 0
             try:
-                response = await self._run_agent_with_transient_retries(request, entry.agent)
-            except Exception:
+                response, attempt_no = await self._run_agent_with_transient_retries(request, entry.agent)
+            except Exception as exc:
                 summary = self.runtime.call_summary(
                     runtime_key,
                     before,
@@ -121,6 +130,26 @@ class AgentScopeChatClient:
                     request.runtime_context,
                 )
                 await self._publish_runtime_summary(summary | {"status": "failed"})
+                # Eval MVP v2：失败路径也落 research_llm_call 行（吞异常）
+                if run_id:
+                    await safe_record(
+                        lambda: eval_repository.record_llm_call(
+                            run_id=run_id,
+                            llm_call_id=llm_call_id,
+                            research_id=request.runtime_context.get("research.id") if request.runtime_context else None,
+                            attempt_no=attempt_no,
+                            input_tokens=0,
+                            output_tokens=0,
+                            duration_ms=int((time.perf_counter() - started_at) * 1000),
+                            outcome="failed",
+                            error_type=exc.__class__.__name__,
+                            start_time=call_start,
+                            end_time=now_local(),
+                            **attribution,
+                            request_model=self.model_name,
+                        ),
+                        context=f"llm_call failed research_id={self.research_id}",
+                    )
                 raise
             span.set_attribute("gen_ai.usage.available", True)
             span.set_attribute("gen_ai.usage.input_tokens", response.token_usage.input_token_count)
@@ -139,9 +168,32 @@ class AgentScopeChatClient:
                     request.runtime_context,
                 ),
             )
+            # Eval MVP v2：成功路径落 research_llm_call 行（token 单一事实源；吞异常）
+            if run_id:
+                await safe_record(
+                    lambda: eval_repository.record_llm_call(
+                        run_id=run_id,
+                        llm_call_id=llm_call_id,
+                        research_id=request.runtime_context.get("research.id") if request.runtime_context else None,
+                        attempt_no=attempt_no,
+                        input_tokens=response.token_usage.input_token_count or 0,
+                        output_tokens=response.token_usage.output_token_count or 0,
+                        duration_ms=int((time.perf_counter() - started_at) * 1000),
+                        outcome="success",
+                        error_type=None,
+                        start_time=call_start,
+                        end_time=now_local(),
+                        **attribution,
+                        request_model=self.model_name,
+                    ),
+                    context=f"llm_call success research_id={self.research_id}",
+                )
             return response
 
-    async def _run_agent_with_transient_retries(self, request: ResearchAgentRequest, agent: Agent) -> ResearchChatResponse:
+    async def _run_agent_with_transient_retries(
+        self, request: ResearchAgentRequest, agent: Agent
+    ) -> tuple[ResearchChatResponse, int]:
+        """返回 (response, attempt_no)。attempt_no = Layer-C 重试次数（0 = 首次成功）。"""
         max_attempts = max(1, self._runtime_int(request, "llm.retry.max_attempts", self.retry_max_attempts))
         initial_delay = max(0.0, self._runtime_float(request, "llm.retry.initial_delay.seconds", self.retry_initial_delay))
         max_delay = max(initial_delay, self._runtime_float(request, "llm.retry.max_delay.seconds", self.retry_max_delay))
@@ -149,10 +201,11 @@ class AgentScopeChatClient:
         while True:
             try:
                 async with self._model_account_semaphore:
-                    return await asyncio.wait_for(
+                    response = await asyncio.wait_for(
                         self._run_agent(request, agent),
                         timeout=self._agent_timeout(request),
                     )
+                    return response, attempt
             except Exception as exc:
                 attempt += 1
                 if attempt >= max_attempts or not self._is_transient_llm_error(exc):

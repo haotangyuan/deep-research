@@ -1,0 +1,563 @@
+{
+  "case_id": "real_71630da4e306",
+  "context_complete": false,
+  "completeness": {
+    "case_available": false,
+    "intent_available": true,
+    "review_available": true,
+    "claims_available": true,
+    "evidence_available": true,
+    "consistency_pre_post_available": false,
+    "verifier_pre_post_available": false,
+    "missing": [
+      "case",
+      "consistency_pre_post",
+      "verifier_pre_post"
+    ],
+    "evaluable": false
+  },
+  "result_eval": {
+    "hard_gate": "failed",
+    "failure_codes": [
+      "citation_incorrect"
+    ],
+    "required_point_coverage": 1.0,
+    "citation_correctness": 0.0,
+    "unsupported_critical_claim_count": 0
+  },
+  "process_eval": {
+    "intent": {
+      "intent_constraint_recall": {
+        "value": 1.0,
+        "passed": 1,
+        "label": null,
+        "reason": "Intent 覆盖 required_points recall=1.00"
+      },
+      "intent_constraint_precision": {
+        "value": 1.0,
+        "passed": 1,
+        "label": null,
+        "reason": "Intent 精确率=1.00"
+      },
+      "intent_routing_accuracy": {
+        "value": 1.0,
+        "passed": 1,
+        "label": null,
+        "reason": "路由=general 期望=general"
+      },
+      "intent_passed": {
+        "value": 1.0,
+        "passed": 1,
+        "label": null,
+        "reason": "Intent 约束齐全"
+      }
+    },
+    "review": {
+      "review_gap_precision": {
+        "value": 0.0,
+        "passed": null,
+        "label": null,
+        "reason": "gap precision=0.00"
+      },
+      "review_gap_recall": {
+        "value": 1.0,
+        "passed": 1,
+        "label": null,
+        "reason": "gap recall=1.00 actual_gaps=['可扩展性与实时更新能力维度仍缺乏官方量化基准（如高并发下的p99延迟、QPS、成本增量）', '缺少AWS、Azure、Google Cloud等云厂商官方的高并发压力测试报告（p99延迟、QPS对比）', '部分量化数据仍来自公司博客（Actian、Meilisearch等），权威性不足', '高并发延迟与可扩展性维度缺少任何云厂商或标准组织在1000并发、百万级文档库场景下的官方压力测试对比数据，仅有工具和定性分析']"
+      },
+      "review_gap_closure_rate": {
+        "value": 0.0,
+        "passed": 0,
+        "label": null,
+        "reason": "gap closure=0.00 closed=[]"
+      },
+      "review_new_evidence_count": {
+        "value": 0.0,
+        "passed": null,
+        "label": null,
+        "reason": "为 gap 新增 evidence=0"
+      },
+      "review_quality_delta": {
+        "value": 0.0,
+        "passed": null,
+        "label": null,
+        "reason": "MVP 占位 delta，生产用真实评分"
+      },
+      "reviewer_token_cost": {
+        "value": 1800.0,
+        "passed": null,
+        "label": null,
+        "reason": "reviewer_tokens=1800"
+      },
+      "review_finding": {
+        "value": null,
+        "passed": null,
+        "label": "Reviewer 找对问题，但最终报告未使用新增 Evidence",
+        "reason": "Reviewer 找对问题，但最终报告未使用新增 Evidence"
+      }
+    },
+    "claims": {
+      "claim_total_claims": {
+        "value": 7.0,
+        "passed": null,
+        "label": null,
+        "reason": "total_claims=7"
+      },
+      "claim_supported_claims": {
+        "value": 4.0,
+        "passed": null,
+        "label": null,
+        "reason": "supported=4"
+      },
+      "claim_partially_supported_claims": {
+        "value": 0.0,
+        "passed": null,
+        "label": null,
+        "reason": "partially_supported=0"
+      },
+      "claim_unsupported_claims": {
+        "value": 0.0,
+        "passed": null,
+        "label": null,
+        "reason": "unsupported=0"
+      },
+      "claim_contradicted_claims": {
+        "value": 0.0,
+        "passed": null,
+        "label": null,
+        "reason": "contradicted=0"
+      },
+      "claim_not_verifiable_claims": {
+        "value": 3.0,
+        "passed": null,
+        "label": null,
+        "reason": "not_verifiable=3"
+      },
+      "citation_completeness": {
+        "value": 0.0,
+        "passed": null,
+        "label": null,
+        "reason": "citation_completeness=0.00"
+      },
+      "citation_correctness": {
+        "value": 0.0,
+        "passed": 0,
+        "label": null,
+        "reason": "citation_correctness=0.00"
+      },
+      "unsupported_critical_claim_count": {
+        "value": 0.0,
+        "passed": 1,
+        "label": null,
+        "reason": "unsupported_critical_claim_count=0"
+      }
+    },
+    "consistency": {
+      "consistency_issues_reported": {
+        "value": 0.0,
+        "passed": null,
+        "label": null,
+        "reason": "issues_reported=0"
+      },
+      "consistency_issues_resolved": {
+        "value": 0.0,
+        "passed": null,
+        "label": null,
+        "reason": "issues_resolved=0"
+      },
+      "consistency_contradictions_before": {
+        "value": 0.0,
+        "passed": null,
+        "label": null,
+        "reason": "contradictions_before=0"
+      },
+      "consistency_contradictions_after": {
+        "value": 0.0,
+        "passed": 1,
+        "label": null,
+        "reason": "contradictions_after=0"
+      },
+      "consistency_claim_retention": {
+        "value": 1.0,
+        "passed": null,
+        "label": null,
+        "reason": "claim_retention=1.00"
+      },
+      "consistency_citation_retention": {
+        "value": 1.0,
+        "passed": null,
+        "label": null,
+        "reason": "citation_retention=1.00"
+      },
+      "consistency_new_regressions": {
+        "value": 0.0,
+        "passed": 1,
+        "label": null,
+        "reason": "new_regressions=0"
+      }
+    },
+    "claim_verifier": {
+      "verifier_checked_claims": {
+        "value": 7.0,
+        "passed": null,
+        "label": null,
+        "reason": "checked_claims=7"
+      },
+      "verifier_unsupported_detection_precision": {
+        "value": 1.0,
+        "passed": null,
+        "label": null,
+        "reason": "detection precision=1.00"
+      },
+      "verifier_unsupported_detection_recall": {
+        "value": 1.0,
+        "passed": 1,
+        "label": null,
+        "reason": "detection recall=1.00 detected=['', 'claim-4583eea95158']"
+      },
+      "verifier_claim_correction_rate": {
+        "value": 1.0,
+        "passed": 1,
+        "label": null,
+        "reason": "correction_rate=1.00"
+      },
+      "verifier_false_warning_count": {
+        "value": 6.0,
+        "passed": 0,
+        "label": null,
+        "reason": "false_warning=6"
+      },
+      "verifier_coverage_regression": {
+        "value": 0.0,
+        "passed": 1,
+        "label": null,
+        "reason": "coverage_regression=0.00"
+      }
+    }
+  },
+  "diagnosis": [
+    "Reviewer 正确发现安全 Gap，但最终报告未使用新增 Evidence",
+    "ClaimVerifier 正确发现并标记 Unsupported Claim（修正率=1.00）"
+  ],
+  "cost": {
+    "input_tokens": 725305,
+    "output_tokens": 143298,
+    "reviewer_tokens": 1800
+  },
+  "trace": {
+    "per_claim": [
+      {
+        "claim_id": "claim-4583eea95158",
+        "claim_text": "来源列表\n\n[1] Actian.",
+        "importance": "minor",
+        "requires_citation": true,
+        "has_citation": false,
+        "citation_evidence_id": null,
+        "citation_mapped": false,
+        "verdict": "supported",
+        "reason": "证据池中的多个条目共同构成了所声称的来源列表，内容明确且具体。"
+      },
+      {
+        "claim_id": "claim-6195843f8e8a",
+        "claim_text": "[缺来源]0版) - AI风险管理框架: Evidence 8 / Evidence 12\n\n[8] EU AI Act Art.",
+        "importance": "minor",
+        "requires_citation": true,
+        "has_citation": false,
+        "citation_evidence_id": null,
+        "citation_mapped": false,
+        "verdict": "not_verifiable",
+        "reason": "Claim内容不完整，仅提及证据编号，无明确断言，无法判断支持状态。"
+      },
+      {
+        "claim_id": "claim-697e5e3c5565",
+        "claim_text": "[缺来源]85: Evidence 11\n\n[19] Menlo Ventures 2024企业AI报告（RAG采纳率51% vs FT 9%）: Evidence 6\n\n[20] Databricks技术博客 - 企业RAG vs Fine-tuning决策框架: Evidence 2 / Evidence 4\n\n[21] Authorea 2026 - RAG最优模型零幻觉研究: Evidence 2\n\n[22] Kernshell 2025 - RAG减少AI幻觉80%：Evidence 2\n\n[23] AWS官方指南 - 从RAG开始构建文档问答系统: Evidence 9 / Evidence 10\n\n[24] NVIDIA rag-perf基准测试工具: Evidence 9\n\n[25] 火山引擎 - RAG vs Fine-tuning决策树: Evidence 7\n\n[26] Metacto - 默认管线建议（混合检索+重排序+长上下文+轻量LoRA）: Evidence 7\n\n[27] 腾讯云企业级RAG指南（2025-2026）: Evidence 7\n\n[28] 《计算机应用与软件》2025 - 上海卷烟厂私有化RAG系统: Evidence 7\n\n[29] Contextual AI - RAG vs Fine-tuning量化指南: Evidence 6\n\n[30] Elastic.",
+        "importance": "critical",
+        "requires_citation": true,
+        "has_citation": false,
+        "citation_evidence_id": null,
+        "citation_mapped": false,
+        "verdict": "not_verifiable",
+        "reason": "claim文本缺失，仅列出引用编号，无法判断支持状态。"
+      },
+      {
+        "claim_id": "claim-7a1f0d1b599b",
+        "claim_text": "[未验证]5, GPT-4): Evidence 10\n\n[15] Google Cloud + NVIDIA + NetApp - 企业级RAG参考架构蓝皮书 (2025): Evidence 10\n\n[16] NVIDIA EKRAG Benchmark - ACL 2025: Evidence 2\n\n[17] arXiv 2026 RAGPerf - 五模块标准化测试框架: Evidence 2\n\n[18] CRUD-RAG基准论文 - 事实问答F1>0.",
+        "importance": "minor",
+        "requires_citation": true,
+        "has_citation": false,
+        "citation_evidence_id": null,
+        "citation_mapped": false,
+        "verdict": "supported",
+        "reason": "证据完全匹配claim内容，直接支持。"
+      },
+      {
+        "claim_id": "claim-7e10e6812c2b",
+        "claim_text": "(引用Menlo Ventures 2024企业AI报告): https://www.actian.com/blog/databases/should-you-use-rag-or-fine-tune-your-llm\n\n[2] PECollective 2026 Cost Analysis - RAG vs Fine-tuning: Source URL in Evidence 1\n\n[3] Contextual AI - RAG vs Fine-tuning Official Comparison Guide: Source URL in Evidence 6\n\n[4] arXiv 2412.",
+        "importance": "minor",
+        "requires_citation": true,
+        "has_citation": false,
+        "citation_evidence_id": null,
+        "citation_mapped": false,
+        "verdict": "supported",
+        "reason": "证据池中ev_54明确引用Menlo Ventures 2024报告，指出RAG占51%、Fine-tuning占9%，与claim所述的引用内容一致。"
+      },
+      {
+        "claim_id": "claim-c9fd514722be",
+        "claim_text": "[缺来源]15 - 高风险AI系统安全要求: Evidence 8\n\n[9] ISO/IEC 42001 - AI管理体系: Evidence 8\n\n[10] 德国DPA 2025指南 - 隐私合规与RAG: Evidence 5 / Evidence 12\n\n[11] IronCore Labs 2024 - 向量嵌入可逆性攻击: Evidence 5\n\n[12] OWASP LLM08:2025 - 上下文泄漏风险: Evidence 5\n\n[13] JPMorgan 2025/2026 AI部署公开披露: Evidence 10 (AWS re:Invent 2025)\n\n[14] Microsoft Research - RAG vs Fine-tuning对比论文 (Llama2-13B, GPT-3.",
+        "importance": "minor",
+        "requires_citation": true,
+        "has_citation": false,
+        "citation_evidence_id": null,
+        "citation_mapped": false,
+        "verdict": "not_verifiable",
+        "reason": "Claim 本身未提供具体的安全要求内容，且引用的 Evidence 8 仅描述向量嵌入反转攻击，未直接论述高风险AI系统的安全要求，无法判断其支持状态。"
+      },
+      {
+        "claim_id": "claim-e8f90ab570f2",
+        "claim_text": "08179 - RAG-IT: Retrieval Augmented Generation with Instruction Tuning for Financial Analysis (2024-2025): https://arxiv.org/abs/2412.08179\n\n[5] UBS FinDoc-RAG - ACL 2025 Benchmark: Evidence 7 (金融行业案例)\n\n[6] Bioengineering PMC 2025 - RAG vs Fine-tuning in Medical QA: Evidence 7 (医疗行业案例)\n\n[7] NIST AI RMF (2.",
+        "importance": "minor",
+        "requires_citation": true,
+        "has_citation": false,
+        "citation_evidence_id": null,
+        "citation_mapped": false,
+        "verdict": "supported",
+        "reason": "Evidence 33 明确提到了 arXiv:2412.08179，并描述了其内容，与 claim 一致。"
+      }
+    ],
+    "evidence_ids": [
+      "ev_1",
+      "ev_2",
+      "ev_3",
+      "ev_4",
+      "ev_5",
+      "ev_6",
+      "ev_7",
+      "ev_8",
+      "ev_9",
+      "ev_10",
+      "ev_11",
+      "ev_12",
+      "ev_13",
+      "ev_14",
+      "ev_15",
+      "ev_16",
+      "ev_17",
+      "ev_18",
+      "ev_19",
+      "ev_20",
+      "ev_21",
+      "ev_22",
+      "ev_23",
+      "ev_24",
+      "ev_25",
+      "ev_26",
+      "ev_27",
+      "ev_28",
+      "ev_29",
+      "ev_30",
+      "ev_31",
+      "ev_32",
+      "ev_33",
+      "ev_34",
+      "ev_35",
+      "ev_36",
+      "ev_37",
+      "ev_38",
+      "ev_39",
+      "ev_40",
+      "ev_41",
+      "ev_42",
+      "ev_43",
+      "ev_44",
+      "ev_45",
+      "ev_46",
+      "ev_47",
+      "ev_48",
+      "ev_49",
+      "ev_50",
+      "ev_51",
+      "ev_52",
+      "ev_53",
+      "ev_54",
+      "ev_55",
+      "ev_56",
+      "ev_57",
+      "ev_58",
+      "ev_59",
+      "ev_60",
+      "ev_61",
+      "ev_62",
+      "ev_63",
+      "ev_64",
+      "ev_65",
+      "ev_66",
+      "ev_67",
+      "ev_68",
+      "ev_69",
+      "ev_70",
+      "ev_71",
+      "ev_72",
+      "ev_73",
+      "ev_74",
+      "ev_75",
+      "ev_76",
+      "ev_77",
+      "ev_78",
+      "ev_79",
+      "ev_80",
+      "ev_81",
+      "ev_82",
+      "ev_83"
+    ],
+    "source_ids": [
+      "https://www.actian.com/blog/databases/should-you-use-rag-or-fine-tune-your-llm",
+      "https://snorkel.ai/blog/which-is-better-retrieval-augmentation-rag-or-fine-tuning-both",
+      "https://tejasraundal.github.io/Teclops-AI/blog/rag-vs-fine-tuning-enterprise",
+      "https://www.ibm.com/think/topics/rag-vs-fine-tuning",
+      "https://www.lasso.security/blog/rag-security",
+      "https://community.deeplearning.ai/t/rag-vs-fine-tuning-which-one-suits-your-llm/760881",
+      "https://www.youtube.com/watch?v=my5wFNQpFO0",
+      "https://iapp.org/news/a/llms-with-retrieval-augmented-generation-good-or-bad-for-privacy-compliance-",
+      "https://watercrawl.dev/blog/The-Best-Pre-Built-Enterprise-RAG",
+      "https://www.researchgate.net/publication/385078877_CRUD-RAG_A_Comprehensive_Chinese_Benchmark_for_Retrieval-Augmented_Generation_of_Large_Language_Models",
+      "https://developer.volcengine.com/articles/7451506721962344460",
+      "https://medium.com/@protectoai/unlocking-llm-privacy-strategic-approaches-for-2025-d1af6a34e9d1",
+      "https://www.ibm.com/think/topics/retrieval-augmented-generation",
+      "https://developer.volcengine.com/articles/7604804928646053934",
+      "https://blog.mithrilsecurity.io/privacy-risks-of-llm-fine-tuning",
+      "/goto?url=CAESZwHuR6pNPijGILeOpBvMR5tFQjMvmk8mEfAydFL2s3DDl6wuD8lpcQESQPWT2RoSLtzxdAF0uHY8pYgKlBg8mISiHz2xyydHY4yFVeq7xxSNSCql0KOV1hvVYCYGKmZvFIgQkHz-9gY%3D",
+      "https://aisera.com/blog/llm-fine-tuning-vs-rag",
+      "https://pecollective.com/blog/rag-vs-fine-tuning-cost",
+      "https://www.sarus.tech/post/privacy-risks-in-llm-fine-tuning",
+      "https://www.k2view.com/blog/retrieval-augmented-generation-vs-fine-tuning",
+      "https://aclanthology.org/2025.finnlp-2.9.pdf",
+      "https://itsupplychain.com/case-studies-of-successful-llm-fine-tuning-in-healthcare",
+      "/goto?url=CAESXgHuR6pNNgES1RgAENwlr2ZMvFDipWk2gqPYetGMGgvn5oSvWlcLzEqZR769pbdZ0PKGR7VOIgSTMz2IPhN397ldhZDr0BmRNey7r2B5Elc056ZIUs5bHe5gojeQKWA%3D",
+      "https://neobram.ai/blog/rag-vs-fine-tuning-enterprise-comparison",
+      "https://www.metacto.com/blogs/rag-vs-fine-tuning-vs-other-llm-techniques-choosing-the-right-approach",
+      "https://medium.com/@adi4u.aditya/enterprise-ready-rag-optimize-latency-and-throughput-3fb879e06b4f",
+      "https://blog.csdn.net/Jailman/article/details/145572542",
+      "https://www.linkedin.com/pulse/fine-tuning-vs-rag-2025-muhammad-awais-mazhar-foiif",
+      "https://dl.acm.org/doi/10.1145/3701228",
+      "https://blogs.nvidia.com/blog/what-is-retrieval-augmented-generation",
+      "https://www.glean.com/blog/retrieval-augemented-generation-vs-fine-tuning",
+      "https://adp.tencentcloud.com/zh/blog/enterprise-rag-guide",
+      "https://www.aidoczh.com/ragflow/blog/the-rise-and-evolution-of-rag-in-2024-a-year-in-review.html",
+      "https://research.ibm.com/blog/retrieval-augmented-generation-RAG",
+      "https://genai.owasp.org/llmrisk/llm082025-vector-and-embedding-weaknesses",
+      "https://pmc.ncbi.nlm.nih.gov/articles/PMC12292519",
+      "https://cloud.tencent.com/developer/article/2658674",
+      "https://www.youtube.com/watch?v=uF5SlraFdyc",
+      "https://www.betteryeah.com/blog/llm-rag-knowledge-base-complete-guide-2025",
+      "https://ironcorelabs.com/security-risks-rag",
+      "https://dataman-ai.medium.com/fine-tuning-vs-rag-e2aa8b193236",
+      "https://www.artech-digital.com/blog/best-practices-for-privacy-in-rag-chatbots",
+      "https://infinitive.com/infinitive-uses-retrieval-augmented-generation-rag-f1-scores-to-guide-development",
+      "https://www.genaimlinstitute.com/blog/rag-vs-knowledge-fine-tuning",
+      "https://www.linkedin.com/pulse/rag-architectural-review-strategic-outlook-2025-bal%C3%A1zs-feh%C3%A9r-bwzpf",
+      "https://www.kore.ai/blog/a-study-comparing-rag-fine-tuning-for-knowledge-base-use-cases",
+      "https://www.53ai.com/news/qianyanjishu/555.html",
+      "https://en.wikipedia.org/wiki/Embedding",
+      "https://www.stratagem-systems.com/blog/rag-implementation-cost-roi-analysis",
+      "/goto?url=CAESWwHuR6pNxVfruSrhN4Gh5Nek2royE6nlCFD8gvTP6UP-I7wv_AQZMRPS5R7r2j2NN4Vh-Irz9XM6NzKN2HgRAwkzKE-r5VGvOdUYYgybm6pFaRX0JUdZnxsItoo%3D",
+      "https://cohere.com/blog/rag-vs-fine-tuning",
+      "https://www.firecrawl.dev/blog/best-enterprise-rag-platforms-2025",
+      "https://www.firecrawl.dev/blog/best-vector-databases",
+      "https://thealliance.ai/blog/mastering-data-cleaning-for-fine-tuning-llms-and-r?hs_amp=true",
+      "https://www.shcas.net/cn/article/pdf/preview/10.3969/j.issn.1000-386x.2025.10.018.pdf",
+      "https://ideas.repec.org/p/arx/papers/2412.08179.html",
+      "https://www.ibm.com/think/topics/embedding",
+      "https://www.finextra.com/blogposting/29032/5-high-roi-uses-of-rag-models-in-banking-and-fintech",
+      "https://www.actian.com/blog/databases/should-you-use-rag-or-fine-tune-your-llm",
+      "https://www.authorea.com/doi/10.22541/au.176903295.54191070",
+      "https://blog.lordpatil.com/posts/enterprise-rag-vertex-ai-rag-engine",
+      "https://www.linkedin.com/posts/philippelimantour_azure-ai-foundry-fine-tuning-updates-in-april-activity-7323022228151803905-pACk",
+      "https://montecarlo.ai/blog-rag-vs-fine-tuning",
+      "https://iapp.org/news/a/llms-with-retrieval-augmented-generation-good-or-bad-for-privacy-compliance-",
+      "https://arxiv.org/html/2508.03098v1",
+      "https://www.compliquest.com/en/blog/what-is-eu-ai-act-requirements-2026",
+      "https://mlcommons.org",
+      "https://digital.nemko.com/regulations/nist-rmf",
+      "https://secureprivacy.ai/blog/gdpr-compliance-2026",
+      "https://www.linkedin.com/company/mlcommons",
+      "https://pecollective.com/blog/rag-vs-fine-tuning-cost",
+      "https://www.linkedin.com/posts/alan-ramirez-architect_fine-tuning-an-llm-can-be-expensive-not-activity-7206341708161167361-SzFm",
+      "https://fusion.jpmorgan.com/insights/implementing-ai-at-an-enterprise-level",
+      "https://www.microsoft.com/en-us/research/publication/rag-vs-fine-tuning-pipelines-tradeoffs-and-a-case-study-on-agriculture",
+      "https://www.ispartnersllc.com/blog/nist-ai-rmf-2025-updates-what-you-need-to-know-about-the-latest-framework-changes",
+      "https://symbl.ai/developers/blog/fine-tuning-vs-rag-an-opinion-and-comparative-analysis",
+      "https://raymondweihongxu.medium.com/case-study-jpmorgan-chases-genai-transformation-98f1217f0b60",
+      "https://research.google/blog/supporting-benchmarks-for-ai-safety-with-mlcommons",
+      "https://medium.com/google-cloud/build-an-enterprise-grade-multimodal-rag-platform-on-google-vertex-ai-part-5-into-production-09c13199285e",
+      "https://www.lumenova.ai/solutions/nist-ai-risk-management-framework",
+      "https://medium.com/@venkataakshay92/enterprise-knowledge-base-q-a-system-using-amazon-bedrock-rag-66aff7fbfb9d",
+      "https://kernelgrowth.io/human-oversight-ai-jpmorgan-strategy",
+      "https://www.youtube.com/watch?v=bu2cD1pCFTs",
+      "https://www.kiteworks.com/gdpr-compliance/gdpr-fines-data-privacy-enforcement-2026",
+      "https://www.youtube.com/watch?v=It769ydwS-k",
+      "https://www.elastic.co/search-labs/blog/rag-vs-fine-tuning",
+      "https://www.gtlaw.com/en/insights/2025/7/eu-ai-act-key-compliance-considerations-ahead-of-august-2025",
+      "https://contextual.ai/blog/rag-vs-fine-tuning-which-approach-is-right-for-enterprise-ai",
+      "https://regolo.ai/ai-privacy-and-compliance-in-2026-what-changes-for-llm-providers",
+      "https://www.youtube.com/watch?v=00Q0G84kq3M",
+      "https://www.sarus.tech/post/considerations-around-privacy-in-rag-based-architectures",
+      "https://jasonhaley.com/2025/05/20/microsoft-build-2025-azure-ai-search",
+      "https://visioncompliance.eu/en/blog/eu-ai-act-compliance-guide",
+      "https://discuss.google.dev/t/unlock-your-enterprise-data-building-scalable-production-ready-rag-pipelines-on-google-cloud/351946",
+      "https://tejasraundal.github.io/Teclops-AI/blog/rag-vs-fine-tuning-enterprise",
+      "https://www.sthambh.com/blog/rag-vs-fine-tuning-enterprise-2026",
+      "https://athenaworks.com/whitepapers/Generative_AI_RAG_Fine-Tuning_and_the_Future_of_Enterprise_AI.pdf",
+      "https://www.dsstream.com/post/rag-vs-fine-tuning",
+      "https://www.youtube.com/watch?v=-W2JdSl1v48",
+      "https://medium.com/@tabers77/llm-fine-tuning-in-2025-a-hands-on-test-driven-blueprint-dd1c7887bb99",
+      "https://dho.stanford.edu/wp-content/uploads/Legal_RAG_Hallucinations.pdf",
+      "https://www.whiteblue.com/post/rag-vs-fine-tuning-strategic-ai-for-today-s-enterprise",
+      "https://www.authorea.com/doi/10.22541/au.176903295.54191070",
+      "https://k21academy.com/gcp-aiml/rag-vs-fine-tuning-on-google-cloud",
+      "https://docs.feishu.cn/article/wiki/RsQDwfpU8igYyZkby4HcE0FgnUg",
+      "https://www.kernshell.com/how-rag-reduces-ai-hallucinations-and-improves-accuracy",
+      "https://www.databricks.com/blog/rag-vs-fine-tuning",
+      "https://www.aidoczh.com/ragflow/blog/the-rise-and-evolution-of-rag-in-2024-a-year-in-review.html",
+      "https://bbs.csdn.net/weixin_29055137/article/details/100164703",
+      "https://www.goldmansachs.com/insights/articles/what-to-expect-from-ai-in-2025-hybrid-workers-robotics-expert-models",
+      "https://aclanthology.org/2025.knowledgenlp-1.13.pdf",
+      "https://www.glean.com/blog/rag-retrieval-augmented-generation",
+      "https://www.iso.org/committee/6794475.html",
+      "https://arxiv.org/html/2603.10765v1",
+      "https://labelyourdata.com/articles/llm-fine-tuning/rag-evaluation",
+      "https://cohere.com/blog/rag-vs-fine-tuning",
+      "https://www.actian.com/blog/databases/should-you-use-rag-or-fine-tune-your-llm",
+      "https://www.modelop.com/ai-governance/ai-regulations-standards/iso-eic-42001",
+      "https://community.openai.com/t/nist-artificial-intelligence-challenge-problems/731794",
+      "https://www.isaca.org/resources/white-papers/2024/understanding-the-eu-ai-act",
+      "https://docs.nvidia.com/rag/latest/performance-benchmarking.html",
+      "https://www.cio.com/article/2130426/nist-launches-ambitious-effort-to-assess-llm-risks.html",
+      "https://industrialcyber.co/nist/nist-fy2025-report-highlights-cybersecurity-and-privacy-initiatives-spanning-ai-5g-iot-critical-infrastructure-resilience",
+      "https://en.wikipedia.org/wiki/Amazon_Web_Services",
+      "https://digital.nemko.com/regulations/nist-rmf",
+      "https://www.usenix.org/system/files/usenixsecurity25-dong-tian.pdf",
+      "https://www.ispartnersllc.com/blog/nist-ai-rmf-2025-updates-what-you-need-to-know-about-the-latest-framework-changes",
+      "https://k21academy.com/gcp-aiml/rag-vs-fine-tuning-on-google-cloud",
+      "https://builder.aws.com",
+      "https://trec.nist.gov/pubs/trec34/papers/Overview_rag.pdf",
+      "https://arxiv.org/html/2601.06779v1",
+      "https://docs.aws.amazon.com/prescriptive-guidance/latest/retrieval-augmented-generation-options/rag-vs-fine-tuning.html",
+      "https://www.linkedin.com/posts/naresh-kumari_rag-performance-benchmarks-elevating-retrieval-activity-7369313875336314880-X439",
+      "https://learn.microsoft.com/en-us/compliance/regulatory/offering-iso-42001",
+      "https://www.meilisearch.com/blog/fine-tuning-vs-rag",
+      "https://aws.amazon.com",
+      "https://kpmg.com/ch/en/insights/artificial-intelligence/iso-iec-42001.html",
+      "https://www.aiactblog.nl/en/posts/ai-privacy",
+      "https://hyperproof.io/ultimate-guide-to-the-eu-ai-act"
+    ],
+    "blocking_gaps": [
+      "高并发延迟与可扩展性维度缺少任何云厂商或标准组织在1000并发、百万级文档库场景下的官方压力测试对比数据，仅有工具和定性分析",
+      "缺少AWS、Azure、Google Cloud等云厂商官方的高并发压力测试报告（p99延迟、QPS对比）",
+      "部分量化数据仍来自公司博客（Actian、Meilisearch等），权威性不足",
+      "可扩展性与实时更新能力维度仍缺乏官方量化基准（如高并发下的p99延迟、QPS、成本增量）"
+    ],
+    "missing_constraints": []
+  },
+  "research_id": "71630da4e30646e5ad7fe9f0717a73ed",
+  "source": "real_ultra_run"
+}

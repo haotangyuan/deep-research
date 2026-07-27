@@ -1,0 +1,78 @@
+{
+  "dataset_name": "mvp_v1",
+  "dataset_version": "1",
+  "items": [
+    {
+      "item_id": "fact_lookup_1",
+      "task_type": "fact_lookup",
+      "language": "zh",
+      "as_of_date": "2026-06-01",
+      "query_snapshot": "截至 2026 年第二季度，全球 AI 市场规模约为多少？给出权威来源与口径。",
+      "required_points": ["市场规模数值", "时间口径", "权威来源"],
+      "reference_facts": [],
+      "forbidden_claims": ["未经来源的具体百分比"],
+      "original_budget_level": "MEDIUM",
+      "sample_reason": "事实检索代表题"
+    },
+    {
+      "item_id": "tech_comparison_1",
+      "task_type": "tech_comparison",
+      "language": "zh",
+      "as_of_date": "2026-06-01",
+      "query_snapshot": "对比 RAG 与 Fine-tuning 在企业知识问答场景的优劣，给出选型建议。",
+      "required_points": ["成本", "可维护性", "时效性", "数据安全", "选型建议"],
+      "reference_facts": [],
+      "forbidden_claims": [],
+      "original_budget_level": "HIGH",
+      "sample_reason": "技术比较代表题"
+    },
+    {
+      "item_id": "market_analysis_1",
+      "task_type": "market_analysis",
+      "language": "zh",
+      "as_of_date": "2026-06-01",
+      "query_snapshot": "分析 2026 年中国新能源汽车市场的竞争格局与主要风险。",
+      "required_points": ["市场份额", "头部玩家", "价格战风险", "政策风险"],
+      "reference_facts": [],
+      "forbidden_claims": [],
+      "original_budget_level": "HIGH",
+      "sample_reason": "市场分析代表题"
+    },
+    {
+      "item_id": "academic_review_1",
+      "task_type": "academic_review",
+      "language": "zh",
+      "as_of_date": "2026-06-01",
+      "query_snapshot": "综述 Retrieval-Augmented Generation 在长上下文场景的研究进展与未解问题。",
+      "required_points": ["核心方法", "benchmark", "未解问题", "代表性论文"],
+      "reference_facts": [],
+      "forbidden_claims": [],
+      "original_budget_level": "ULTRA",
+      "sample_reason": "学术综述代表题"
+    },
+    {
+      "item_id": "trend_forecast_1",
+      "task_type": "trend_forecast",
+      "language": "zh",
+      "as_of_date": "2026-06-01",
+      "query_snapshot": "预测 2026 下半年 AI Agent 在企业落地的趋势与最大不确定性。",
+      "required_points": ["趋势", "驱动因素", "最大不确定性", "时间口径"],
+      "reference_facts": [],
+      "forbidden_claims": ["把预测表述为既定事实"],
+      "original_budget_level": "ULTRA",
+      "sample_reason": "趋势预测代表题"
+    },
+    {
+      "item_id": "evidence_conflict_1",
+      "task_type": "evidence_conflict",
+      "language": "zh",
+      "as_of_date": "2026-06-01",
+      "query_snapshot": "关于某公司 2025 年营收增长，公开来源口径不一致，给出 reconciled 结论与可信度标注。",
+      "required_points": ["冲突口径", "reconciled 结论", "可信度标注", "数据来源"],
+      "reference_facts": [],
+      "forbidden_claims": ["回避冲突只引单一来源"],
+      "original_budget_level": "ULTRA",
+      "sample_reason": "证据冲突/不足代表题"
+    }
+  ]
+}
