@@ -27,6 +27,7 @@ from evals.runner import (
     default_evaluators,
     evaluate_case_run,
     load_dataset_json,
+    select_mechanism_item_ids,
     seed_dataset,
 )
 
@@ -75,6 +76,83 @@ def test_dataset_json_has_six_questions_across_task_types() -> None:
     for item in data["items"]:
         assert item["query_snapshot"]
         assert item["required_points"]
+        assert item["evaluation_contract"]["eligible_variants"] == ["MEDIUM", "HIGH", "ULTRA"]
+        for criterion in item["required_points"]:
+            assert criterion["criterion_id"]
+            assert criterion["text"]
+            assert criterion["weight"] >= 1
+            assert isinstance(criterion["critical"], bool)
+            assert criterion["acceptance"]
+
+
+def test_formal_dataset_has_40_paired_items_and_valid_mechanism_subsets() -> None:
+    data = load_dataset_json("formal_v1_40questions.json")
+    items = data["items"]
+    assert data["dataset_name"] == "deep_research_formal_v1"
+    assert data["experiment_design"]["tier_comparison_repeats"] == 1
+    assert data["experiment_design"]["mechanism_ablation_repeats"] == 1
+    assert len(items) == 40
+    assert sum(item["split_name"] == "calibration" for item in items) == 10
+    assert sum(item["split_name"] == "test" for item in items) == 30
+
+    expected_task_counts = {
+        "fact_lookup": 6,
+        "tech_comparison": 8,
+        "market_analysis": 7,
+        "academic_review": 7,
+        "trend_forecast": 6,
+        "evidence_conflict": 6,
+    }
+    assert {
+        task_type: sum(item["task_type"] == task_type for item in items)
+        for task_type in expected_task_counts
+    } == expected_task_counts
+    assert {
+        difficulty: sum(
+            item["evaluation_contract"]["strata"]["difficulty"] == difficulty for item in items
+        )
+        for difficulty in ("easy", "medium", "hard")
+    } == {"easy": 8, "medium": 18, "hard": 14}
+
+    item_ids = {item["item_id"] for item in items}
+    assert len(item_ids) == 40
+    for item in items:
+        assert item["evaluation_contract"]["eligible_variants"] == ["MEDIUM", "HIGH", "ULTRA"]
+        assert item["evaluation_contract"]["constraints"]["as_of_date"] == item["as_of_date"]
+        assert len(item["required_points"]) >= 3
+        assert len(item["reference_facts"]) >= 2
+        assert item["forbidden_claims"]
+        criterion_ids = [criterion["criterion_id"] for criterion in item["required_points"]]
+        assert len(criterion_ids) == len(set(criterion_ids))
+        for criterion in item["required_points"]:
+            assert criterion["text"]
+            assert criterion["weight"] >= 1
+            assert isinstance(criterion["critical"], bool)
+            assert criterion["acceptance"]
+
+    expected_mechanism_sizes = {
+        "high_report_ablation": 8,
+        "reviewer_ablation": 10,
+        "multi_round_ablation": 10,
+        "section_team_ablation": 6,
+        "claim_verifier_ablation": 8,
+    }
+    tag_by_suite = {
+        "high_report_ablation": "synthesis_applicable",
+        "reviewer_ablation": "reviewer_applicable",
+        "multi_round_ablation": "multi_round_applicable",
+        "section_team_ablation": "section_team_applicable",
+        "claim_verifier_ablation": "claim_verifier_applicable",
+    }
+    by_id = {item["item_id"]: item for item in items}
+    for suite_name, expected_size in expected_mechanism_sizes.items():
+        selected = select_mechanism_item_ids(data, suite_name)
+        assert len(selected) == expected_size
+        assert set(selected) <= item_ids
+        assert all(
+            by_id[item_id]["evaluation_contract"]["mechanism_tags"][tag_by_suite[suite_name]]
+            for item_id in selected
+        )
 
 
 @pytest.fixture(autouse=True)

@@ -763,33 +763,6 @@ class AgentPipeline:
             span.set_attribute("report.quality.status", str(context.get("status") or ""))
             span.set_attribute("report.weak.sections.count", len(context.get("weakSections") or []))
             span.set_attribute("report.blocking.gaps.count", len(context.get("blockingGaps") or []))
-            # trace 标量本地落地（observability 导出 Langfuse 的同时落 research_span_attribute，
-            # 供 eval 读取 report quality 摘要；set_attribute 不删，Langfuse 导出不受影响）。
-            if state.run_id:
-                from app.infrastructure.eval_repository import eval_repository, safe_record
-
-                weak_sections = context.get("weakSections") or []
-                blocking_gaps = context.get("blockingGaps") or []
-                gate_attrs = {
-                    "report.quality.status": str(context.get("status") or ""),
-                    "report.weak.sections.count": len(weak_sections),
-                    "report.blocking.gaps.count": len(blocking_gaps),
-                }
-                if weak_sections:
-                    gate_attrs["report.weak.sections"] = weak_sections
-                if blocking_gaps:
-                    gate_attrs["report.blocking.gaps"] = blocking_gaps
-                await safe_record(
-                    lambda: eval_repository.upsert_span_attributes(
-                        run_id=state.run_id,
-                        research_id=state.research_id,
-                        trace_id=state.run_trace_id,
-                        span_scope="UltraReportGate",
-                        round_no=0,
-                        attrs=gate_attrs,
-                    ),
-                    context=f"span_attribute report_gate research_id={state.research_id}",
-                )
             title = "报告前验证通过" if context.get("status") == "ready" else "报告前验证未完全通过"
             await event_publisher.publish_event(
                 state.research_id,

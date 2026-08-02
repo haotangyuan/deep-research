@@ -37,10 +37,31 @@ class LLMJudgeEvaluator(BaseEvaluator):
     async def evaluate(self, ctx: EvalContext) -> list[MetricResult]:
         if not self.metrics:
             return []
-        raw = await self.chat(JUDGE_SYSTEM_PROMPT, self.user_prompt(ctx))
-        parsed = parse_json_safe(raw) or {}
-        scores: dict[str, Any] = parsed.get("metrics") or {}
-        reasons: dict[str, str] = parsed.get("reasons") or {}
+        user_prompt = self.user_prompt(ctx)
+        scores: dict[str, Any] = {}
+        reasons: dict[str, str] = {}
+        raw = ""
+        # Judge 偶尔返回可解析 JSON 但漏掉某个 metric。最多补问一次，避免把协议
+        # 失败误当成报告得分缺失；第二次仍不完整时保留 None，绝不默认通过。
+        for attempt in range(2):
+            retry_note = ""
+            if attempt:
+                missing = [metric for metric in self.metrics if not isinstance(scores.get(metric), (int, float))]
+                retry_note = (
+                    "\n上一次输出不完整。请重新输出完整 JSON，必须包含这些缺失指标："
+                    + ", ".join(missing)
+                    + f"\n上一次输出：{raw[:1000]}"
+                )
+            raw = await self.chat(JUDGE_SYSTEM_PROMPT, user_prompt + retry_note)
+            parsed = parse_json_safe(raw) or {}
+            parsed_scores = parsed.get("metrics") or {}
+            parsed_reasons = parsed.get("reasons") or {}
+            if isinstance(parsed_scores, dict):
+                scores.update(parsed_scores)
+            if isinstance(parsed_reasons, dict):
+                reasons.update(parsed_reasons)
+            if all(isinstance(scores.get(metric), (int, float)) for metric in self.metrics):
+                break
         results: list[MetricResult] = []
         for metric in self.metrics:
             val = scores.get(metric)
@@ -54,7 +75,7 @@ class LLMJudgeEvaluator(BaseEvaluator):
                     metric_name=metric,
                     metric_group=self.metric_group,
                     evaluator_name=self.name,
-                    evaluator_version=self.version,
+                    evaluator_version=f"{self.version}-retry1",
                     score_value=score,
                     passed=passed,
                     judge_model=self.judge_model,

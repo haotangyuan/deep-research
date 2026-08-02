@@ -337,9 +337,6 @@ CREATE TABLE `research_artifact` (
   `response_model` varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '响应模型名',
   `prompt_version` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'prompt 版本',
   `prompt_sha256` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'prompt sha256',
-  `input_tokens` bigint unsigned DEFAULT NULL COMMENT '输入 token',
-  `output_tokens` bigint unsigned DEFAULT NULL COMMENT '输出 token',
-  `duration_ms` bigint unsigned DEFAULT NULL COMMENT '耗时',
   `outcome` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'success/failed',
   `fallback_used` int unsigned DEFAULT NULL COMMENT '是否降级 0/1',
   `metadata_json` text COLLATE utf8mb4_unicode_ci COMMENT '附加元数据',
@@ -379,8 +376,7 @@ CREATE TABLE `research_llm_call` (
   PRIMARY KEY (`id`),
   KEY `idx_research_llm_call_run` (`run_id`),
   KEY `idx_research_llm_call_research` (`research_id`),
-  KEY `idx_research_llm_call_stage` (`stage_name`),
-  UNIQUE KEY `uniq_research_llm_call_run` (`run_id`,`id`)
+  KEY `idx_research_llm_call_stage` (`stage_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='LLM 调用 token 事实源';
 
 --
@@ -437,27 +433,6 @@ CREATE TABLE `research_claim_manifest` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='claim-citation 清单';
 
 --
--- Table structure for table `research_span_attribute`
---
-DROP TABLE IF EXISTS `research_span_attribute`;
-CREATE TABLE `research_span_attribute` (
-  `id` char(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '行ID',
-  `run_id` char(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'run_id',
-  `research_id` char(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '研究ID',
-  `trace_id` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'OTel trace_id，§18 score→trace 直链',
-  `span_scope` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'span 作用域：UltraDynamicReview / UltraReportGate',
-  `round_no` int unsigned DEFAULT 0 COMMENT '动态轮次（无 round 概念归 0）',
-  `attr_key` varchar(96) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '属性键，与 span 属性同名',
-  `attr_value_num` decimal(20,4) DEFAULT NULL COMMENT '数值类标量',
-  `attr_value_str` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '字符串类标量',
-  `attr_value_json` text COLLATE utf8mb4_unicode_ci COMMENT '结构化标量',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  PRIMARY KEY (`id`),
-  KEY `idx_research_span_attribute_run` (`run_id`),
-  KEY `idx_research_span_attribute_trace` (`trace_id`),
-  UNIQUE KEY `uniq_research_span_attribute_key` (`run_id`,`span_scope`,`round_no`,`attr_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='trace 标量本地落地，供 eval 读取';
-
 -- ----------------------------
 -- Table structure for table `eval_dataset_item`
 -- ----------------------------
@@ -468,8 +443,8 @@ CREATE TABLE `eval_dataset_item` (
   `dataset_version` varchar(64) NOT NULL,
   `source_research_id` char(32) DEFAULT NULL,
   `source_run_id` char(32) DEFAULT NULL,
-  `query_snapshot` mediumtext,
-  `query_sha256` char(64) DEFAULT NULL,
+  `query_snapshot` mediumtext NOT NULL,
+  `query_sha256` char(64) NOT NULL,
   `task_type` varchar(64) DEFAULT NULL,
   `language` varchar(16) DEFAULT NULL,
   `as_of_date` date DEFAULT NULL,
@@ -477,7 +452,7 @@ CREATE TABLE `eval_dataset_item` (
   `reference_facts_json` text,
   `forbidden_claims_json` text,
   `source_policy_json` text,
-  `original_budget_level` varchar(16) DEFAULT NULL,
+  `evaluation_contract_json` text COMMENT 'Eval 前冻结的约束、预期意图、适用档位与机制标签',
   `privacy_status` varchar(32) DEFAULT NULL,
   `annotation_status` varchar(32) DEFAULT NULL,
   `sample_reason` varchar(64) DEFAULT NULL,
@@ -485,7 +460,7 @@ CREATE TABLE `eval_dataset_item` (
   `create_time` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_eval_dataset_name_version` (`dataset_name`,`dataset_version`,`split_name`,`task_type`),
-  KEY `idx_eval_dataset_query_sha` (`query_sha256`)
+  UNIQUE KEY `uniq_eval_dataset_item_query` (`dataset_name`,`dataset_version`,`query_sha256`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Eval 候选题目（脱敏、版本化）';
 
 -- ----------------------------
@@ -495,9 +470,9 @@ DROP TABLE IF EXISTS `eval_experiment`;
 CREATE TABLE `eval_experiment` (
   `id` char(32) NOT NULL,
   `name` varchar(128) NOT NULL,
-  `dataset_name` varchar(128) DEFAULT NULL,
-  `dataset_version` varchar(64) DEFAULT NULL,
-  `experiment_type` varchar(64) DEFAULT NULL,
+  `dataset_name` varchar(128) NOT NULL,
+  `dataset_version` varchar(64) NOT NULL,
+  `experiment_type` varchar(64) NOT NULL,
   `baseline_experiment_id` char(32) DEFAULT NULL,
   `workflow_version` varchar(64) DEFAULT NULL,
   `evaluator_version` varchar(64) DEFAULT NULL,
@@ -518,20 +493,15 @@ CREATE TABLE `eval_experiment` (
 DROP TABLE IF EXISTS `eval_case_run`;
 CREATE TABLE `eval_case_run` (
   `id` char(32) NOT NULL,
-  `experiment_id` char(32) DEFAULT NULL,
-  `dataset_item_id` char(32) DEFAULT NULL,
-  `research_id` char(32) DEFAULT NULL,
+  `experiment_id` char(32) NOT NULL,
+  `dataset_item_id` char(32) NOT NULL,
   `run_id` char(32) DEFAULT NULL,
-  `variant_name` varchar(128) DEFAULT NULL,
+  `variant_name` varchar(128) NOT NULL,
   `repeat_no` int DEFAULT '0',
   `gate_passed` tinyint DEFAULT NULL,
   `failure_reasons_json` text,
   `total_score` decimal(8,4) DEFAULT NULL,
-  `input_tokens` bigint DEFAULT NULL,
-  `output_tokens` bigint DEFAULT NULL,
-  `duration_ms` bigint DEFAULT NULL,
   `estimated_cost` decimal(12,6) DEFAULT NULL,
-  `result_json` mediumtext,
   `create_time` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_eval_case_run_key` (`experiment_id`,`dataset_item_id`,`variant_name`,`repeat_no`),
@@ -546,26 +516,22 @@ CREATE TABLE `eval_case_run` (
 DROP TABLE IF EXISTS `eval_score`;
 CREATE TABLE `eval_score` (
   `id` bigint NOT NULL AUTO_INCREMENT,
-  `case_run_id` char(32) DEFAULT NULL,
-  `metric_name` varchar(128) DEFAULT NULL,
+  `case_run_id` char(32) NOT NULL,
+  `metric_name` varchar(128) NOT NULL,
   `metric_group` varchar(64) DEFAULT NULL,
   `score_value` decimal(10,6) DEFAULT NULL,
   `label_value` varchar(64) DEFAULT NULL,
   `passed` tinyint DEFAULT NULL,
-  `evaluator_name` varchar(128) DEFAULT NULL,
-  `evaluator_version` varchar(64) DEFAULT NULL,
+  `evaluator_name` varchar(128) NOT NULL,
+  `evaluator_version` varchar(64) NOT NULL,
   `judge_model` varchar(256) DEFAULT NULL,
   `reason` text,
   `details_json` mediumtext,
-  `trace_id` varchar(64) DEFAULT NULL COMMENT 'OTel trace_id 直链，§18 跳转',
-  `report_artifact_id` char(32) DEFAULT NULL COMMENT '关联 report_final artifact id，§18 跳转',
   `create_time` datetime DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uniq_eval_score_key` (`case_run_id`,`metric_name`,`evaluator_version`),
   KEY `idx_eval_score_case_run` (`case_run_id`),
-  KEY `idx_eval_score_metric` (`metric_name`),
-  KEY `idx_eval_score_trace` (`trace_id`),
-  KEY `idx_eval_score_report_artifact` (`report_artifact_id`)
+  KEY `idx_eval_score_metric` (`metric_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Eval 通用分数';
 
 --

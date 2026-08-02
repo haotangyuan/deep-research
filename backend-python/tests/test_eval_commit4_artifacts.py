@@ -88,6 +88,12 @@ class _Artifacts:
     async def write_claim_manifest(self, *args, **kwargs):
         return 0
 
+    async def replace_claim_manifest(self, *args, **kwargs):
+        return 0
+
+    async def load_source_catalog(self, _run_id):
+        return []
+
 
 async def _noop_event(*_args, **_kwargs) -> int:
     return 1
@@ -266,4 +272,3 @@ async def test_high_dual_draft_and_synthesis_persist(monkeypatch) -> None:
     assert len(syn) == 1
     assert syn[0]["stage_name"] == "ReportAgent:high-synthesis"
     assert syn[0]["outcome"] == "success"
-

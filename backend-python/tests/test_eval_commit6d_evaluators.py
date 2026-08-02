@@ -42,8 +42,9 @@ async def test_deterministic_gate_and_citation_metrics() -> None:
     assert by_name["citation_parse_rate"].score_value == 1.0
     # effective_citation_count = 1 md url + 0.5 * dangling numeric
     assert by_name["effective_citation_count"].score_value == 1.5
-    # 无 manifest → traceability=1.0（无 claim 不算违规）
-    assert by_name["citation_traceability"].passed == 1
+    # 无 manifest 不是完美可追溯，而是不可评估，避免空报告虚高。
+    assert by_name["citation_traceability"].score_value is None
+    assert by_name["citation_traceability"].passed is None
 
 
 @pytest.mark.asyncio
@@ -97,7 +98,7 @@ async def test_citation_judge_maps_llm_json_to_metrics() -> None:
     assert results["citation_correctness"].score_value == 0.7
     assert results["claim_factuality"].reason == "属实"
     assert results["claim_factuality"].judge_model == "mimo"
-    assert results["claim_factuality"].evaluator_version == "1.0.0"
+    assert results["claim_factuality"].evaluator_version == "1.0.0-retry1"
 
 
 @pytest.mark.asyncio
@@ -151,12 +152,48 @@ async def test_llm_judge_handles_malformed_output_gracefully() -> None:
 
 
 @pytest.mark.asyncio
+async def test_llm_judge_retries_once_when_metric_is_missing() -> None:
+    calls = 0
+
+    async def fake_chat(sys_p, user_p):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return '{"metrics":{"claim_factuality":0.9}}'
+        return (
+            '{"metrics":{"claim_factuality":0.9,"citation_completeness":0.8,'
+            '"citation_correctness":0.7},"reasons":{}}'
+        )
+
+    results = await CitationJudgeEvaluator(chat_fn=fake_chat).evaluate(_ctx("报告"))
+    assert calls == 2
+    assert all(result.score_value is not None for result in results)
+    assert all(result.evaluator_version.endswith("-retry1") for result in results)
+
+
+@pytest.mark.asyncio
 async def test_cost_effectiveness_per_pass() -> None:
     ev = CostEffectivenessEvaluator()
     ctx = _ctx("报告", run={"estimated_cost": 0.12, "gate_passed": 1, "input_tokens": 100, "output_tokens": 50})
     results = {r.metric_name: r for r in await ev.evaluate(ctx)}
     assert results["cost_per_pass"].score_value == 0.12
     assert results["total_cost"].score_value == 0.12
+    assert results["total_tokens_k"].score_value == 0.15
+    assert results["tokens_per_pass_k"].score_value == 0.15
+
+
+@pytest.mark.asyncio
+async def test_cost_effectiveness_does_not_turn_missing_money_into_zero() -> None:
+    ev = CostEffectivenessEvaluator()
+    ctx = _ctx(
+        "报告",
+        run={"estimated_cost": None, "gate_passed": 0, "input_tokens": 100, "output_tokens": 50},
+    )
+    results = {r.metric_name: r for r in await ev.evaluate(ctx)}
+    assert results["total_cost"].score_value is None
+    assert results["cost_per_pass"].score_value is None
+    assert results["total_tokens_k"].score_value == 0.15
+    assert results["tokens_per_pass_k"].score_value is None
 
 
 @pytest.mark.asyncio

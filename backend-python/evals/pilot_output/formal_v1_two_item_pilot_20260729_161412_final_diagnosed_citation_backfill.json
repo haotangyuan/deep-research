@@ -1,0 +1,422 @@
+{
+  "source_eval": "/Users/admin/study/deep-research/backend-python/evals/pilot_output/formal_v1_two_item_pilot_20260729_161412_final_diagnosed.json",
+  "experiment_id": "7789a71fa21c49daac2729549f6b47bb",
+  "results": [
+    {
+      "run_id": "3048e4039bc94bd1b81d1d1f4f117e43",
+      "research_id": "0e550e0bd25a4db2b641a0b30651f505",
+      "status": "backfilled",
+      "claim_count": 14,
+      "manifest_row_count": 17,
+      "cited_claim_count": 14,
+      "claim_traceability": 1.0,
+      "citation_audit": {
+        "marker_ids": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "resolved_marker_ids": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "unresolved_marker_ids": [],
+        "reference_count": 4,
+        "traceability": 1.0
+      },
+      "unresolved_claims": [],
+      "report_headings": [
+        "# NIST AI风险管理框架及其生成式AI配置文件深度研究报告",
+        "## 概述",
+        "## 第一部分：AI RMF 1.0 四个核心功能解析",
+        "### 1.1 Govern（治理）——跨领域的基础功能",
+        "### 1.2 Map（映射）——识别与情境化风险",
+        "### 1.3 Measure（度量）——定量评估风险",
+        "### 1.4 Manage（管理）——风险处置与持续改进",
+        "### 1.5 四个功能的闭环逻辑",
+        "## 第二部分：Generative AI Profile的补充机制",
+        "### 2.1 Profile的定位与关系",
+        "### 2.2 生成式AI的12类特有风险",
+        "### 2.3 Profile对各RMF功能的细化扩展",
+        "#### 2.3.1 Map阶段的扩展",
+        "#### 2.3.2 Measure阶段的扩展",
+        "#### 2.3.3 Manage阶段的扩展",
+        "#### 2.3.4 Govern阶段的扩展",
+        "## 第三部分：企业落地映射关系表",
+        "### 3.1 Govern（治理）对应措施（5项）",
+        "### 3.2 Map（映射）对应措施（5项）",
+        "### 3.3 Measure（度量）对应措施（6项）",
+        "### 3.4 Manage（管理）对应措施（8项）",
+        "## 第四部分：关键发现与洞察",
+        "### 4.1 AI RMF 1.0与Generative AI Profile的协同关系",
+        "### 4.2 企业落地的核心挑战与应对",
+        "### 4.3 框架的适用范围与边界",
+        "## 结论",
+        "## 来源"
+      ]
+    },
+    {
+      "run_id": "0d795d93424949fdb15aa97629bd4876",
+      "research_id": "fd355a577c8f49b2bf077d86a4ad8534",
+      "status": "backfilled",
+      "claim_count": 17,
+      "manifest_row_count": 19,
+      "cited_claim_count": 17,
+      "claim_traceability": 1.0,
+      "citation_audit": {
+        "marker_ids": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "resolved_marker_ids": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "unresolved_marker_ids": [],
+        "reference_count": 6,
+        "traceability": 1.0
+      },
+      "unresolved_claims": [],
+      "report_headings": [
+        "# NIST AI RMF 1.0 与 Generative AI Profile：核心功能解析、补充框架与企业落地融合报告",
+        "## 1. 执行摘要",
+        "## 2. 研究背景：两份核心文件的定位与关系",
+        "## 3. AI RMF 1.0 四个核心功能的完整定义与内涵",
+        "### 3.1 GOVERN（治理）—— 跨领域基础功能",
+        "### 3.2 MAP（映射）—— 情境理解功能",
+        "### 3.3 MEASURE（度量）—— 风险评估功能",
+        "### 3.4 MANAGE（管理）—— 风险处理功能",
+        "### 功能关系示意图",
+        "## 4. Generative AI Profile 对每个功能的补充分析",
+        "### 4.1 GOVERN 功能对比",
+        "### 4.2 MAP 功能对比",
+        "### 4.3 MEASURE 功能对比",
+        "### 4.4 MANAGE 功能对比",
+        "## 5. 企业落地映射矩阵（可直接使用）",
+        "### 5.1 功能级映射",
+        "### 5.2 关键子类别与落地建议详细映射",
+        "## 6. 风险类别总览对比",
+        "## 7. 数据可视化：关键维度对比",
+        "### 表1：AI RMF 1.0 四个功能的子类别数量与Profile补充行动数量对比",
+        "### 表2：Profile 12个风险类别在AI RMF 1.0中明确提及情况",
+        "## 8. 总结与建议",
+        "### 8.1 核心结论",
+        "### 8.2 企业行动建议",
+        "### 8.3 实施优先领域",
+        "### 8.4 风险评估与后续关注",
+        "## 9. 参考来源列表"
+      ]
+    },
+    {
+      "run_id": "d74838f21c1e4f8a9f1c765e8d8cbdc0",
+      "research_id": "4840a7011b204c20b0b803da114c4695",
+      "status": "backfilled",
+      "claim_count": 31,
+      "manifest_row_count": 46,
+      "cited_claim_count": 31,
+      "claim_traceability": 1.0,
+      "citation_audit": {
+        "marker_ids": [],
+        "resolved_marker_ids": [],
+        "unresolved_marker_ids": [],
+        "reference_count": 0,
+        "traceability": null
+      },
+      "unresolved_claims": [],
+      "report_headings": [
+        "# NIST AI RMF 1.0 核心功能与 Generative AI Profile 企业落地映射报告",
+        "## 1. 引言",
+        "## 2. AI RMF 1.0 核心功能定义与内容详解",
+        "### 2.1 Govern（治理）",
+        "### 2.2 Map（映射）",
+        "### 2.3 Measure（测量）",
+        "### 2.4 Manage（管理）",
+        "### 2.5 四个功能的相互关系",
+        "### 2.6 NIST AI 600-1与AI RMF 1.0的关系",
+        "## 3. 生成式 AI 特有风险与挑战分析",
+        "### 3.1 虚构（Confabulation）",
+        "### 3.2 有害偏见（Harmful Bias）",
+        "### 3.3 数据隐私（Data Privacy）",
+        "### 3.4 CBRN 信息（化学、生物、放射、核武器相关能力）",
+        "### 3.5 信息安全（Information Security）",
+        "### 3.6 总结",
+        "## 4. Generative AI Profile 的补充机制与内容解析",
+        "### 4.1 补充而非替代：NIST官方定位",
+        "### 4.2 补充机制：新增风险类别与细化行动建议",
+        "### 4.3 12个生成式AI特有风险类别及代表性行动项",
+        "### 4.4 映射示例：生成式AI特有风险到AI RMF功能",
+        "## 5. 企业落地：四个核心功能与生成式 AI 风险控制措施的直接映射",
+        "### 5.1 实施要点",
+        "### 5.2 相关事实来源",
+        "## 附录：风险类别对应关系速查表"
+      ]
+    },
+    {
+      "run_id": "e1c0722623354fa59d5a7c1e5ec73d0e",
+      "research_id": "969b3a882c56474ba38a4eb829700134",
+      "status": "backfilled",
+      "claim_count": 24,
+      "manifest_row_count": 74,
+      "cited_claim_count": 23,
+      "claim_traceability": 0.9583333333333334,
+      "citation_audit": {
+        "marker_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15",
+          "16"
+        ],
+        "resolved_marker_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14"
+        ],
+        "unresolved_marker_ids": [
+          "15",
+          "16"
+        ],
+        "reference_count": 14,
+        "traceability": 0.875
+      },
+      "unresolved_claims": [
+        {
+          "claim_id": "claim-932fcd5ead6d",
+          "claim_text": "**实证数据与测试循环的差距**：使用实验室工况（NEDC/WLTP）将低估实际使用中的排放20–30%[15][16]，这是导致多数LCA研究与实际数据存在系统性偏差的重要根源。",
+          "importance": "critical",
+          "citation_markers": [
+            "[15]",
+            "[16]"
+          ]
+        }
+      ],
+      "report_headings": [
+        "# 纯电动车全生命周期温室气体排放差异的系统性分析：基于LCA方法学的比较研究",
+        "## 1. 概述",
+        "## 2. 研究对象与方法",
+        "### 2.1 研究选取标准",
+        "### 2.2 功能单位统一",
+        "## 3. 三类研究的数值对比与关键假设",
+        "## 4. 五个关键因素对排放结论的影响",
+        "### 4.1 电网碳强度：最具影响力的单一变量",
+        "### 4.2 电池生产排放假设：十年间下降近50%",
+        "### 4.3 车辆寿命假设：影响生产阶段排放的摊薄效应",
+        "### 4.4 车型的影响",
+        "### 4.5 电池回收假设：方法学选择导致的差异",
+        "## 5. LCA方法学差异对结论的系统性影响",
+        "## 6. 结论的适用条件",
+        "### 6.1 低排放情景（< 80 g CO₂-eq/km）",
+        "### 6.2 中等排放情景（80–150 g CO₂-eq/km）",
+        "### 6.3 高排放情景（> 150 g CO₂-eq/km）",
+        "## 7. 关键发现与洞察",
+        "## 8. 结论",
+        "## 来源"
+      ]
+    },
+    {
+      "run_id": "688ad5f44156427ca278a8c5d4cf3320",
+      "research_id": "00ee99f916bc4b9ca6a90e27483e51d0",
+      "status": "backfilled",
+      "claim_count": 33,
+      "manifest_row_count": 101,
+      "cited_claim_count": 23,
+      "claim_traceability": 0.696969696969697,
+      "citation_audit": {
+        "marker_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15",
+          "16"
+        ],
+        "resolved_marker_ids": [
+          "1",
+          "2",
+          "3",
+          "4",
+          "8",
+          "9"
+        ],
+        "unresolved_marker_ids": [
+          "5",
+          "6",
+          "7",
+          "10",
+          "11",
+          "12",
+          "13",
+          "14",
+          "15",
+          "16"
+        ],
+        "reference_count": 9,
+        "traceability": 0.375
+      },
+      "unresolved_claims": [
+        {
+          "claim_id": "claim-82893ee8f424",
+          "claim_text": "2 电池生产环节\n\n**影响范围：±20–30%（总排放），电池生产碳排放范围60-200 kg CO₂e/kWh**\n\n电池生产碳排放是 **第二大差异来源**，跨研究范围为60–200 kg CO₂e/kWh [6][13]。",
+          "importance": "critical",
+          "citation_markers": [
+            "[6]",
+            "[13]"
+          ]
+        },
+        {
+          "claim_id": "claim-c5f82219c51b",
+          "claim_text": "- **制造区域敏感性**：制造电网碳强度变化可导致电池生产排放相差 **±30–50%** [6][13]。",
+          "importance": "critical",
+          "citation_markers": [
+            "[6]",
+            "[13]"
+          ]
+        },
+        {
+          "claim_id": "claim-8b00ef46e405",
+          "claim_text": "> **适用条件**：2024年后电池生产排放已降至60–100 kg CO₂e/kWh，若使用早期研究数据（如Ellingsen 2016的150–200 kg CO₂e/kWh）会导致BEV排放评估偏高20–30% [13]。",
+          "importance": "critical",
+          "citation_markers": [
+            "[13]"
+          ]
+        },
+        {
+          "claim_id": "claim-10a7bdd7a00b",
+          "claim_text": "4 车型分级\n\n**影响范围：±20–30%（不同级别），大型SUV排放可达紧凑型车的2-3倍**\n\n车型选择导致排放差异可达 **2–3倍** [10][15]。",
+          "importance": "critical",
+          "citation_markers": [
+            "[10]",
+            "[15]"
+          ]
+        },
+        {
+          "claim_id": "claim-fe4da9471432",
+          "claim_text": "**大型SUV的BEV排放（140–190 g/km）接近紧凑型ICEV排放（200–250 g/km）**，削弱了电动化优势 [10][15]。",
+          "importance": "minor",
+          "citation_markers": [
+            "[10]",
+            "[15]"
+          ]
+        },
+        {
+          "claim_id": "claim-555a731550fc",
+          "claim_text": "5 回收假设\n\n**影响范围：±5–20%（总排放），主要体现在生产阶段**\n\n回收假设影响相对较小，但跨研究差异显著 [14]。",
+          "importance": "critical",
+          "citation_markers": [
+            "[14]"
+          ]
+        },
+        {
+          "claim_id": "claim-4bffbabd1f3a",
+          "claim_text": "二次利用（退役电池储能）可额外抵消5–10%电池碳足迹 [14]。",
+          "importance": "critical",
+          "citation_markers": [
+            "[14]"
+          ]
+        },
+        {
+          "claim_id": "claim-d95a96c8838e",
+          "claim_text": "2 关键阈值条件\n\n基于IPCC AR6和Ecoinvent的综合分析 [16]：\n\n- **当电网碳强度 < 650 g CO₂/kWh 且 车辆寿命 > 150,000 km**：BEV全生命周期排放确定低于任何同级别ICEV（紧凑型BEV 120–145 vs ICEV 200–250 g/km）\n- **当电网碳强度 < 400 g CO₂/kWh**：BEV排放低于所有ICEV场景（包括最省油的混合动力车）\n- **当电网碳强度 > 800 g CO₂/kWh 且 车辆寿命 < 100,000 km 且 为大型SUV**：BEV优势微弱或消失，需具体车型分析\n\n> **通用阈值**：BEV排放低于ICEV的通用条件是 **电网碳强度 ≤ 650 g/kWh** 且 **车辆寿命 ≥ 150,000 km** [16]。",
+          "importance": "minor",
+          "citation_markers": [
+            "[16]",
+            "[16]"
+          ]
+        },
+        {
+          "claim_id": "claim-c35f4e10d00b",
+          "claim_text": "[5]）：~150+ g/km\n- **2022年**（Koroma et al.",
+          "importance": "critical",
+          "citation_markers": [
+            "[5]"
+          ]
+        },
+        {
+          "claim_id": "claim-852991f191ec",
+          "claim_text": "**LFP vs NMC化学体系影响约±8–15 g/km**：LFP生产排放略高但寿命更长 [12]。",
+          "importance": "minor",
+          "citation_markers": [
+            "[12]"
+          ]
+        }
+      ],
+      "report_headings": [
+        "# 纯电动车全生命周期温室气体排放研究结论差异的综合分析",
+        "## 执行摘要",
+        "## 1. 引言",
+        "### 1.1 研究目标与范围",
+        "### 1.2 研究来源清单",
+        "## 2. 方法学与功能单位统一",
+        "### 2.1 功能单位统一方法",
+        "## 3. 核心结论差异概览",
+        "## 4. 五大影响因素分析",
+        "### 4.1 电网结构（发电能源组合）",
+        "### 4.2 电池生产环节",
+        "### 4.3 车辆寿命假设",
+        "### 4.4 车型分级",
+        "### 4.5 回收假设",
+        "## 5. 参数敏感性排序与排放全域范围",
+        "### 5.1 敏感性排序",
+        "### 5.2 排放全域范围一览",
+        "## 6. 适用条件矩阵：每项研究结论何时适用",
+        "### 6.1 条件性适用矩阵",
+        "### 6.2 关键阈值条件",
+        "### 6.3 研究结论的选用建议",
+        "## 7. 跨研究差异的系统性归因",
+        "### 7.1 时间维度差异",
+        "### 7.2 方法学差异",
+        "### 7.3 区域背景差异",
+        "### 7.4 关键分歧与共识",
+        "## 8. 结论与未来研究方向",
+        "### 8.1 核心发现",
+        "### 8.2 未来研究方向",
+        "## 来源列表"
+      ]
+    },
+    {
+      "run_id": "7d0c2f18c4fb450fa77c88378b61e524",
+      "research_id": "a78b905894db40bc821987094fe747ee",
+      "status": "skipped",
+      "reason": "report_final missing"
+    }
+  ]
+}

@@ -1,0 +1,513 @@
+{
+  "schema_version": "1.0.0",
+  "iteration_id": "7789a71fa21c49daac2729549f6b47bb",
+  "experiment_id": "7789a71fa21c49daac2729549f6b47bb",
+  "created_at": "2026-07-29T17:46:44+08:00",
+  "dataset": {
+    "name": "deep_research_formal_v1",
+    "version": "1"
+  },
+  "run_scope": {
+    "case_count": 6,
+    "item_ids": [
+      "fv1_ec_01",
+      "fv1_fact_02"
+    ],
+    "variants": [
+      "HIGH",
+      "MEDIUM",
+      "ULTRA"
+    ],
+    "repeat_no": 0,
+    "runs": [
+      {
+        "item_id": "fv1_fact_02",
+        "variant": "MEDIUM",
+        "research_id": "0e550e0bd25a4db2b641a0b30651f505",
+        "run_id": "3048e4039bc94bd1b81d1d1f4f117e43",
+        "status": "COMPLETED",
+        "outcome": "success",
+        "tokens": 84625
+      },
+      {
+        "item_id": "fv1_fact_02",
+        "variant": "HIGH",
+        "research_id": "fd355a577c8f49b2bf077d86a4ad8534",
+        "run_id": "0d795d93424949fdb15aa97629bd4876",
+        "status": "COMPLETED",
+        "outcome": "success",
+        "tokens": 118057
+      },
+      {
+        "item_id": "fv1_fact_02",
+        "variant": "ULTRA",
+        "research_id": "4840a7011b204c20b0b803da114c4695",
+        "run_id": "d74838f21c1e4f8a9f1c765e8d8cbdc0",
+        "status": "COMPLETED",
+        "outcome": "degraded",
+        "tokens": 215650
+      },
+      {
+        "item_id": "fv1_ec_01",
+        "variant": "MEDIUM",
+        "research_id": "969b3a882c56474ba38a4eb829700134",
+        "run_id": "e1c0722623354fa59d5a7c1e5ec73d0e",
+        "status": "COMPLETED",
+        "outcome": "success",
+        "tokens": 69781
+      },
+      {
+        "item_id": "fv1_ec_01",
+        "variant": "HIGH",
+        "research_id": "00ee99f916bc4b9ca6a90e27483e51d0",
+        "run_id": "688ad5f44156427ca278a8c5d4cf3320",
+        "status": "COMPLETED",
+        "outcome": "success",
+        "tokens": 186026
+      },
+      {
+        "item_id": "fv1_ec_01",
+        "variant": "ULTRA",
+        "research_id": "a78b905894db40bc821987094fe747ee",
+        "run_id": "7d0c2f18c4fb450fa77c88378b61e524",
+        "status": "CANCELLED",
+        "outcome": "hitl_wait",
+        "tokens": 1796
+      }
+    ]
+  },
+  "eval_summary": {
+    "case_count": 6,
+    "workflow_completed_count": 5,
+    "hard_gate_pass_count": 1,
+    "top_blocking_root_causes": [
+      {
+        "code": "citation_claim_linkage_failure",
+        "case_count": 4
+      },
+      {
+        "code": "scope_clarification_error",
+        "case_count": 1
+      }
+    ],
+    "agent_module_priority": [
+      {
+        "module": "ReportAgent",
+        "diagnosis_count": 5
+      },
+      {
+        "module": "ClaimVerifier",
+        "diagnosis_count": 4
+      },
+      {
+        "module": "ClaimManifestPersistence",
+        "diagnosis_count": 4
+      },
+      {
+        "module": "ReportConsistencyAgent",
+        "diagnosis_count": 2
+      },
+      {
+        "module": "ScopeAgent",
+        "diagnosis_count": 1
+      },
+      {
+        "module": "ReportSectionAgent",
+        "diagnosis_count": 1
+      },
+      {
+        "module": "UltraDynamicReviewer",
+        "diagnosis_count": 1
+      },
+      {
+        "module": "RoundArtifactRecorder",
+        "diagnosis_count": 1
+      }
+    ],
+    "optimization_backlog": [
+      "为每个关键 Claim 强制保存 citation_url、evidence_id 和报告引用标记的三方映射；在 ReportAgent 输出后运行一致性校验，存在悬空引用时先修复再完成报告。",
+      "把 Dataset 的 should_clarify 契约加入 Scope 提示词和回归测试；对信息已充分的问题禁止生成澄清，并记录触发澄清的具体缺口。",
+      "修订提示词增加“保留已支持 Claim”约束；修订后按 claim_id 做差异检查，只有明确解决冲突或删除不支持内容时才允许 Claim 消失。",
+      "合并前建立章节 Claim/Citation 清单，合并后逐项校验保留率；把去重和删除事实拆开，禁止因文本压缩丢失独有证据。",
+      "冻结 Reviewer 前后的同口径报告/证据快照，并用同一 Judge 分别评分；只有得到 quality_delta_per_round 和 marginal_quality_per_1k_tokens，才能判断 Reviewer 是否值得保留。"
+    ]
+  },
+  "artifacts": {
+    "eval_json": "/Users/admin/study/deep-research/backend-python/evals/pilot_output/formal_v1_two_item_pilot_20260729_161412_final_diagnosed.json",
+    "citation_backfill": "/Users/admin/study/deep-research/backend-python/evals/pilot_output/formal_v1_two_item_pilot_20260729_161412_final_diagnosed_citation_backfill.json",
+    "citation_validation": "/Users/admin/study/deep-research/backend-python/evals/pilot_output/formal_v1_two_item_pilot_20260729_161412_final_diagnosed_citation_validation.json"
+  },
+  "problems": [
+    {
+      "code": "citation_claim_linkage_failure",
+      "title": "报告内容基本正确，但引用与 Claim Manifest 的关联链路丢失",
+      "severity": "blocking",
+      "root_cause": "报告内容基本正确，但引用与 Claim Manifest 的关联链路丢失",
+      "agent_modules": [
+        "ReportAgent",
+        "ClaimVerifier",
+        "ClaimManifestPersistence"
+      ],
+      "recommendation": "为每个关键 Claim 强制保存 citation_url、evidence_id 和报告引用标记的三方映射；在 ReportAgent 输出后运行一致性校验，存在悬空引用时先修复再完成报告。",
+      "affected_cases": [
+        {
+          "item_id": "fv1_ec_01",
+          "item_label": "参数与系统边界导致的证据冲突题",
+          "variant": "MEDIUM",
+          "research_id": "969b3a882c56474ba38a4eb829700134",
+          "run_id": "e1c0722623354fa59d5a7c1e5ec73d0e",
+          "hard_gate_passed": 0
+        },
+        {
+          "item_id": "fv1_ec_01",
+          "item_label": "参数与系统边界导致的证据冲突题",
+          "variant": "HIGH",
+          "research_id": "00ee99f916bc4b9ca6a90e27483e51d0",
+          "run_id": "688ad5f44156427ca278a8c5d4cf3320",
+          "hard_gate_passed": 0
+        },
+        {
+          "item_id": "fv1_fact_02",
+          "item_label": "标准框架事实与落地映射题",
+          "variant": "MEDIUM",
+          "research_id": "0e550e0bd25a4db2b641a0b30651f505",
+          "run_id": "3048e4039bc94bd1b81d1d1f4f117e43",
+          "hard_gate_passed": 0
+        },
+        {
+          "item_id": "fv1_fact_02",
+          "item_label": "标准框架事实与落地映射题",
+          "variant": "HIGH",
+          "research_id": "fd355a577c8f49b2bf077d86a4ad8534",
+          "run_id": "0d795d93424949fdb15aa97629bd4876",
+          "hard_gate_passed": 0
+        }
+      ],
+      "evidence": [
+        {
+          "item_id": "fv1_ec_01",
+          "variant": "MEDIUM",
+          "metrics": [
+            {
+              "metric": "hard_gate.failure_codes",
+              "value": [
+                "dangling_citation",
+                "unsupported_critical_claim"
+              ]
+            },
+            {
+              "metric": "claim_factuality",
+              "value": 0.8
+            },
+            {
+              "metric": "citation_traceability",
+              "value": 0.0975609756097561
+            }
+          ],
+          "confidence": 0.96
+        },
+        {
+          "item_id": "fv1_ec_01",
+          "variant": "HIGH",
+          "metrics": [
+            {
+              "metric": "hard_gate.failure_codes",
+              "value": [
+                "dangling_citation",
+                "unsupported_critical_claim"
+              ]
+            },
+            {
+              "metric": "claim_factuality",
+              "value": 1.0
+            },
+            {
+              "metric": "citation_traceability",
+              "value": 0.0
+            }
+          ],
+          "confidence": 0.96
+        },
+        {
+          "item_id": "fv1_fact_02",
+          "variant": "MEDIUM",
+          "metrics": [
+            {
+              "metric": "hard_gate.failure_codes",
+              "value": [
+                "dangling_citation"
+              ]
+            },
+            {
+              "metric": "claim_factuality",
+              "value": 1.0
+            },
+            {
+              "metric": "citation_traceability",
+              "value": 0.0
+            }
+          ],
+          "confidence": 0.96
+        },
+        {
+          "item_id": "fv1_fact_02",
+          "variant": "HIGH",
+          "metrics": [
+            {
+              "metric": "hard_gate.failure_codes",
+              "value": [
+                "dangling_citation",
+                "unsupported_critical_claim"
+              ]
+            },
+            {
+              "metric": "claim_factuality",
+              "value": 1.0
+            },
+            {
+              "metric": "citation_traceability",
+              "value": 0.0
+            }
+          ],
+          "confidence": 0.96
+        }
+      ]
+    },
+    {
+      "code": "scope_clarification_error",
+      "title": "ScopeAgent 产生了不必要或错误的澄清",
+      "severity": "blocking",
+      "root_cause": "ScopeAgent 产生了不必要或错误的澄清",
+      "agent_modules": [
+        "ScopeAgent"
+      ],
+      "recommendation": "把 Dataset 的 should_clarify 契约加入 Scope 提示词和回归测试；对信息已充分的问题禁止生成澄清，并记录触发澄清的具体缺口。",
+      "affected_cases": [
+        {
+          "item_id": "fv1_ec_01",
+          "item_label": "参数与系统边界导致的证据冲突题",
+          "variant": "ULTRA",
+          "research_id": "a78b905894db40bc821987094fe747ee",
+          "run_id": "7d0c2f18c4fb450fa77c88378b61e524",
+          "hard_gate_passed": 0
+        }
+      ],
+      "evidence": [
+        {
+          "item_id": "fv1_ec_01",
+          "variant": "ULTRA",
+          "metrics": [
+            {
+              "metric": "clarification_decision_accuracy",
+              "value": 0.0
+            },
+            {
+              "metric": "workflow_completed",
+              "value": 0
+            },
+            {
+              "metric": "run.outcome",
+              "value": "hitl_wait"
+            }
+          ],
+          "confidence": 0.99
+        }
+      ]
+    },
+    {
+      "code": "section_revision_claim_loss",
+      "title": "章节修订过程中丢失了较多 Claim",
+      "severity": "warning",
+      "root_cause": "章节修订过程中丢失了较多 Claim",
+      "agent_modules": [
+        "ReportSectionAgent",
+        "ReportConsistencyAgent"
+      ],
+      "recommendation": "修订提示词增加“保留已支持 Claim”约束；修订后按 claim_id 做差异检查，只有明确解决冲突或删除不支持内容时才允许 Claim 消失。",
+      "affected_cases": [
+        {
+          "item_id": "fv1_fact_02",
+          "item_label": "标准框架事实与落地映射题",
+          "variant": "ULTRA",
+          "research_id": "4840a7011b204c20b0b803da114c4695",
+          "run_id": "d74838f21c1e4f8a9f1c765e8d8cbdc0",
+          "hard_gate_passed": 1
+        }
+      ],
+      "evidence": [
+        {
+          "item_id": "fv1_fact_02",
+          "variant": "ULTRA",
+          "metrics": [
+            {
+              "metric": "claim_retention_after_revision",
+              "value": 0.6587
+            }
+          ],
+          "confidence": 0.86
+        }
+      ]
+    },
+    {
+      "code": "report_merge_information_loss",
+      "title": "章节合并阶段存在明显信息损失",
+      "severity": "warning",
+      "root_cause": "章节合并阶段存在明显信息损失",
+      "agent_modules": [
+        "ReportConsistencyAgent",
+        "ReportAgent"
+      ],
+      "recommendation": "合并前建立章节 Claim/Citation 清单，合并后逐项校验保留率；把去重和删除事实拆开，禁止因文本压缩丢失独有证据。",
+      "affected_cases": [
+        {
+          "item_id": "fv1_fact_02",
+          "item_label": "标准框架事实与落地映射题",
+          "variant": "ULTRA",
+          "research_id": "4840a7011b204c20b0b803da114c4695",
+          "run_id": "d74838f21c1e4f8a9f1c765e8d8cbdc0",
+          "hard_gate_passed": 1
+        }
+      ],
+      "evidence": [
+        {
+          "item_id": "fv1_fact_02",
+          "variant": "ULTRA",
+          "metrics": [
+            {
+              "metric": "merge_information_loss",
+              "value": 0.1875
+            }
+          ],
+          "confidence": 0.84
+        }
+      ]
+    },
+    {
+      "code": "reviewer_uplift_not_measurable",
+      "title": "Reviewer 已消耗 Token，但缺少可比较的前后质量增益",
+      "severity": "warning",
+      "root_cause": "Reviewer 已消耗 Token，但缺少可比较的前后质量增益",
+      "agent_modules": [
+        "UltraDynamicReviewer",
+        "RoundArtifactRecorder"
+      ],
+      "recommendation": "冻结 Reviewer 前后的同口径报告/证据快照，并用同一 Judge 分别评分；只有得到 quality_delta_per_round 和 marginal_quality_per_1k_tokens，才能判断 Reviewer 是否值得保留。",
+      "affected_cases": [
+        {
+          "item_id": "fv1_fact_02",
+          "item_label": "标准框架事实与落地映射题",
+          "variant": "ULTRA",
+          "research_id": "4840a7011b204c20b0b803da114c4695",
+          "run_id": "d74838f21c1e4f8a9f1c765e8d8cbdc0",
+          "hard_gate_passed": 1
+        }
+      ],
+      "evidence": [
+        {
+          "item_id": "fv1_fact_02",
+          "variant": "ULTRA",
+          "metrics": [
+            {
+              "metric": "reviewer_token_cost",
+              "value": 6726.0
+            },
+            {
+              "metric": "quality_delta_per_round",
+              "value": null
+            },
+            {
+              "metric": "reviewer_consensus",
+              "value": "split"
+            }
+          ],
+          "confidence": 1.0
+        }
+      ]
+    }
+  ],
+  "changes": [
+    {
+      "problem_codes": [
+        "citation_claim_linkage_failure"
+      ],
+      "summary": "解析正文引用编号与来源列表 URL 的映射，排除来源章节伪 Claim；在 ReportAgent 终态增加 citation audit，并以当前报告原子替换 Manifest；强化 HIGH/多角度报告引用完整性约束。",
+      "files": [
+        "app/application/claim_manifest.py",
+        "app/application/agents.py",
+        "app/infrastructure/eval_repository.py",
+        "app/application/prompts.py"
+      ]
+    }
+  ],
+  "validation": {
+    "status": "partial",
+    "checks": [
+      {
+        "name": "完整后端回归（排除环境版本锁）",
+        "result": "passed",
+        "evidence": "147 passed, 18 skipped, 1 deselected；唯一未跑项是本机 AgentScope 2.0.2 与仓库要求 2.0.3 的既知环境差异"
+      },
+      {
+        "name": "既有 Run Manifest 回填",
+        "result": "passed",
+        "evidence": "5 个有报告的 Run 已回填，1 个空报告跳过"
+      },
+      {
+        "name": "引用 Hard Gate 定向复验",
+        "result": "partial",
+        "evidence": "NIST MEDIUM/HIGH/ULTRA 全通过；电动车 MEDIUM 仅剩 1 个 unsupported critical claim；HIGH 仍有真实悬空引用"
+      }
+    ],
+    "before_after": [
+      {
+        "case": "fv1_fact_02/MEDIUM",
+        "metric": "citation_traceability",
+        "before": 0.0,
+        "after": 1.0
+      },
+      {
+        "case": "fv1_fact_02/HIGH",
+        "metric": "citation_traceability",
+        "before": 0.0,
+        "after": 1.0
+      },
+      {
+        "case": "fv1_fact_02/HIGH",
+        "metric": "unsupported_critical_claim_count",
+        "before": 3,
+        "after": 0
+      },
+      {
+        "case": "fv1_ec_01/MEDIUM",
+        "metric": "citation_traceability",
+        "before": 0.0975609756,
+        "after": 0.9583333333
+      },
+      {
+        "case": "fv1_ec_01/MEDIUM",
+        "metric": "unsupported_critical_claim_count",
+        "before": 51,
+        "after": 1
+      },
+      {
+        "case": "fv1_ec_01/HIGH",
+        "metric": "citation_traceability",
+        "before": 0.0,
+        "after": 0.696969697
+      },
+      {
+        "case": "fv1_ec_01/HIGH",
+        "metric": "unsupported_critical_claim_count",
+        "before": 84,
+        "after": 7
+      }
+    ]
+  },
+  "next_actions": [
+    "为每个关键 Claim 强制保存 citation_url、evidence_id 和报告引用标记的三方映射；在 ReportAgent 输出后运行一致性校验，存在悬空引用时先修复再完成报告。",
+    "把 Dataset 的 should_clarify 契约加入 Scope 提示词和回归测试；对信息已充分的问题禁止生成澄清，并记录触发澄清的具体缺口。",
+    "修订提示词增加“保留已支持 Claim”约束；修订后按 claim_id 做差异检查，只有明确解决冲突或删除不支持内容时才允许 Claim 消失。",
+    "合并前建立章节 Claim/Citation 清单，合并后逐项校验保留率；把去重和删除事实拆开，禁止因文本压缩丢失独有证据。",
+    "冻结 Reviewer 前后的同口径报告/证据快照，并用同一 Judge 分别评分；只有得到 quality_delta_per_round 和 marginal_quality_per_1k_tokens，才能判断 Reviewer 是否值得保留。"
+  ]
+}

@@ -12,23 +12,21 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
 
-from app.core.config import get_settings
 from app.domain.models import (
     EvalCaseRun,
     EvalDatasetItem,
     ResearchArtifact,
     ResearchClaimManifest,
+    ResearchLlmCall,
     ResearchRun,
-    ResearchSpanAttribute,
-    ResearchStageUsage,
 )
 from app.infrastructure.db import SessionLocal
 from app.infrastructure.eval_repository import eval_repository
@@ -39,6 +37,7 @@ from evals.evaluators.citation_judge import CitationJudgeEvaluator
 from evals.evaluators.coverage_judge import CoverageJudgeEvaluator
 from evals.evaluators.deterministic import DeterministicEvaluator
 from evals.evaluators.hard_gate import HardGateEvaluator
+from evals.evaluators.intent_alignment import IntentAlignmentEvaluator
 from evals.evaluators.report_quality_judge import ReportQualityJudgeEvaluator
 from evals.evaluators.reviewer_effectiveness import ReviewerEffectivenessEvaluator
 from evals.evaluators.round_delta import RoundDeltaEvaluator
@@ -52,10 +51,85 @@ logger = logging.getLogger(__name__)
 
 _DATASET_DIR = Path(__file__).resolve().parent / "datasets"
 
+_MECHANISM_TAG_BY_SUITE = {
+    "high_report_ablation": "synthesis_applicable",
+    "reviewer_ablation": "reviewer_applicable",
+    "multi_round_ablation": "multi_round_applicable",
+    "section_team_ablation": "section_team_applicable",
+    "claim_verifier_ablation": "claim_verifier_applicable",
+}
+
+_SUPPORTED_RESEARCH_TYPES = {
+    "tech_comparison",
+    "market_analysis",
+    "academic_review",
+    "fact_lookup",
+    "trend_forecast",
+    "general",
+}
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """递归合并 Dataset 默认值，避免 40 个 Item 重复同一份契约。"""
+    merged = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
 
 def load_dataset_json(name: str = "mvp_v1_6questions.json") -> dict[str, Any]:
+    """加载并展开 Dataset 默认值和机制抽样标签。
+
+    源 JSON 保持适合人工维护的紧凑形式；返回值中的每个 Item 都是可直接落库的
+    完整契约。``mechanism_suites`` 是机制样本的唯一选择清单，并同步展开为 Item
+    的 ``mechanism_tags``，避免清单和标签分别维护后发生漂移。
+    """
     path = _DATASET_DIR / name
-    return json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    defaults = data.get("defaults") or {}
+    mechanism_suites = data.get("mechanism_suites") or {}
+    memberships: dict[str, set[str]] = {}
+    for suite_name, item_ids in mechanism_suites.items():
+        for item_id in item_ids:
+            memberships.setdefault(str(item_id), set()).add(str(suite_name))
+
+    normalized_items: list[dict[str, Any]] = []
+    for raw_item in data.get("items", []):
+        item = _deep_merge(defaults, raw_item)
+        contract = item.setdefault("evaluation_contract", {})
+        expected_type = (contract.get("expected_intent") or {}).get("research_type")
+        if expected_type not in _SUPPORTED_RESEARCH_TYPES:
+            raise ValueError(
+                f"item {item.get('item_id')} expected_intent.research_type "
+                f"不在 Agent 路由枚举中: {expected_type}"
+            )
+        constraints = contract.setdefault("constraints", {})
+        constraints["language"] = item.get("language")
+        constraints["as_of_date"] = item.get("as_of_date")
+        tags = contract.setdefault("mechanism_tags", {})
+        for suite_name in memberships.get(str(item.get("item_id")), set()):
+            tag_name = _MECHANISM_TAG_BY_SUITE.get(suite_name)
+            if tag_name:
+                tags[tag_name] = True
+        normalized_items.append(item)
+    data["items"] = normalized_items
+    return data
+
+
+def select_mechanism_item_ids(data: dict[str, Any], suite_name: str) -> list[str]:
+    """从正式 E2E Dataset 中抽取某个机制实验的 Item ID。"""
+    suites = data.get("mechanism_suites") or {}
+    if suite_name not in suites:
+        raise KeyError(f"unknown mechanism suite: {suite_name}")
+    known_ids = {str(item.get("item_id")) for item in data.get("items", [])}
+    selected = [str(item_id) for item_id in suites[suite_name]]
+    missing = sorted(set(selected) - known_ids)
+    if missing:
+        raise ValueError(f"mechanism suite {suite_name} contains unknown item ids: {missing}")
+    return selected
 
 
 async def seed_dataset(json_path: str | None = None) -> list[str]:
@@ -77,11 +151,12 @@ async def seed_dataset(json_path: str | None = None) -> list[str]:
             required_points=item.get("required_points"),
             reference_facts=item.get("reference_facts"),
             forbidden_claims=item.get("forbidden_claims"),
-            original_budget_level=item.get("original_budget_level"),
-            privacy_status="privacy_reviewed",
-            annotation_status="ready",
+            source_policy=item.get("source_policy"),
+            evaluation_contract=item.get("evaluation_contract"),
+            privacy_status=item.get("privacy_status") or "privacy_reviewed",
+            annotation_status=item.get("annotation_status") or "ready",
             sample_reason=item.get("sample_reason"),
-            split_name="test",
+            split_name=item.get("split_name") or "test",
         )
         item_ids.append(iid)
     return item_ids
@@ -94,6 +169,7 @@ def default_evaluators(*, chat_fn: ChatFn | None = None, judge_model: str | None
     """
     judges: list[BaseEvaluator] = [
         DeterministicEvaluator(),
+        IntentAlignmentEvaluator(),
         ClaimExtractorEvaluator(),
         CostEffectivenessEvaluator(),
         ReviewerEffectivenessEvaluator(),
@@ -115,16 +191,56 @@ def default_evaluators(*, chat_fn: ChatFn | None = None, judge_model: str | None
 
 
 async def _load_case_context(case_run_id: str) -> EvalContext:
-    """从 DB 装配一个 case_run 的评估输入。"""
+    """从精简后的 8 张核心表装配一个 case_run 的评估输入。
+
+    过程正文统一读取 ``research_artifact``；成本事实读取 ``research_llm_call``。
+    不再从 ``research_span_attribute`` / ``research_stage_usage`` / workflow_event
+    拼装重复事实。
+    """
+
+    def _json_dict(raw: str | None) -> dict[str, Any]:
+        if not raw:
+            return {}
+        try:
+            value = json.loads(raw)
+        except Exception:  # noqa: BLE001
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def _review_attrs(decision: dict[str, Any]) -> dict[str, Any]:
+        summary = decision.get("reviewSummary") if isinstance(decision.get("reviewSummary"), dict) else {}
+        scoreboard = (
+            decision.get("qualityScoreboard")
+            if isinstance(decision.get("qualityScoreboard"), dict)
+            else {}
+        )
+        gaps = list(decision.get("blockingGaps") or [])
+        attrs: dict[str, Any] = {
+            "review.next.action": decision.get("nextAction"),
+            "review.continue.votes": int(summary.get("continueVotes") or 0),
+            "review.report.votes": int(summary.get("reportVotes") or 0),
+            "review.total.votes": int(summary.get("totalVotes") or 0),
+            "review.consensus": summary.get("consensus"),
+            "review.gaps.count": len(gaps),
+        }
+        for dim in ("coverage", "evidence", "freshness", "sourceDiversity", "consistency"):
+            score = scoreboard.get(dim)
+            if isinstance(score, (int, float)):
+                attrs[f"review.score.{dim}"] = float(score)
+        return attrs
+
     async with SessionLocal() as session:
-        # 关联 run_id
         case_run = await session.scalar(select(EvalCaseRun).where(EvalCaseRun.id == case_run_id))
     run_id = getattr(case_run, "run_id", None) if case_run else None
-    # eval_case_run 直链字段（§18 score→trace/artifact 跳转与成本核算）
     estimated_cost = getattr(case_run, "estimated_cost", None) if case_run else None
     gate_passed = getattr(case_run, "gate_passed", None) if case_run else None
     run_row: dict[str, Any] = {}
     report = ""
+    research_brief = ""
+    intent_metadata: dict[str, Any] = {}
+    research_plans: list[dict[str, Any]] = []
+    evidence_items: list[dict[str, Any]] = []
+    round_reviews: list[dict[str, Any]] = []
     merged_report = ""
     report_synthesis = ""
     manifest: list[dict[str, Any]] = []
@@ -132,10 +248,8 @@ async def _load_case_context(case_run_id: str) -> EvalContext:
     section_artifacts: dict[str, dict[str, Any]] = {}
     report_drafts: list[dict[str, Any]] = []
     artifact_counts: dict[str, int] = {}
-    # trace 标量装配（research_span_attribute）与阶段 token 聚合（research_stage_usage）
     review_attributes: dict[int, dict[str, Any]] = {}
     report_quality: dict[str, Any] = {}
-    reviewer_tokens: int = 0
     reviewer_lenses: list[str] = []
     if run_id:
         async with SessionLocal() as session:
@@ -147,34 +261,59 @@ async def _load_case_context(case_run_id: str) -> EvalContext:
                     "output_tokens": run.output_tokens,
                     "duration_ms": run.active_duration_ms,
                     "budget_level": run.budget_level,
-                    "trace_id": run.trace_id,  # §18 score→trace 直链
-                    "estimated_cost": estimated_cost,  # eval_case_run 直链
-                    "gate_passed": gate_passed,  # eval_case_run 直链
+                    "trace_id": run.trace_id,
+                    "estimated_cost": estimated_cost,
+                    "gate_passed": gate_passed,
                 }
             arts = (
                 await session.scalars(select(ResearchArtifact).where(ResearchArtifact.run_id == run_id))
             ).all()
-            report_artifact_id: str | None = None
             for a in arts:
                 artifact_counts[a.artifact_type] = artifact_counts.get(a.artifact_type, 0) + 1
+                meta = _json_dict(a.metadata_json)
                 if a.artifact_type == "report_final":
                     report = a.content or ""
-                    report_artifact_id = a.id  # §18 score→artifact 直链
+                elif a.artifact_type == "research_brief":
+                    research_brief = a.content or ""
+                    intent_metadata = meta
+                elif a.artifact_type == "research_plan":
+                    plan = _json_dict(a.content)
+                    plan.setdefault("round_no", a.round_no or 0)
+                    plan["artifact_id"] = a.id
+                    research_plans.append(plan)
+                elif a.artifact_type == "evidence_item":
+                    evidence = _json_dict(a.content)
+                    evidence.update(
+                        {
+                            "artifact_id": a.id,
+                            "round_no": a.round_no or 0,
+                            "section_id": a.section_id or None,
+                            "task_key": meta.get("task_key"),
+                            "branch_index": meta.get("branch_index"),
+                            "task_title": meta.get("task_title"),
+                            "research_topic": meta.get("research_topic"),
+                        }
+                    )
+                    evidence_items.append(evidence)
+                elif a.artifact_type == "round_review":
+                    decision = _json_dict(a.content)
+                    if not decision:
+                        decision = dict(meta)
+                    decision["artifact_id"] = a.id
+                    decision["round_no"] = a.round_no or 0
+                    round_reviews.append(decision)
+                    review_attributes[a.round_no or 0] = _review_attrs(decision)
                 elif a.artifact_type == "report_merged":
                     merged_report = a.content or ""
                 elif a.artifact_type == "source_snapshot":
-                    meta: dict[str, Any] = {}
-                    if a.metadata_json:
-                        try:
-                            meta = json.loads(a.metadata_json) or {}
-                        except Exception:  # noqa: BLE001
-                            meta = {}
                     sources.append(
                         {
                             "url": (meta.get("url") or "").strip(),
                             "title": meta.get("title") or "",
                             "score": meta.get("score"),
                             "round_no": a.round_no,
+                            "task_key": meta.get("task_key"),
+                            "branch_index": meta.get("branch_index"),
                         }
                     )
                 elif a.artifact_type in ("report_section_draft", "report_section_revision"):
@@ -187,72 +326,59 @@ async def _load_case_context(case_run_id: str) -> EvalContext:
                     )
                 elif a.artifact_type == "report_synthesis":
                     report_synthesis = a.content or ""
-            # trace 标量落地表（research_span_attribute）装配：review.*（UltraDynamicReview，
-            # per-round）+ report.quality.*（UltraReportGate）。数值类用 attr_value_num，
-            # 字符串用 attr_value_str，结构化用 attr_value_json。
-            span_rows = (
-                await session.scalars(
-                    select(ResearchSpanAttribute).where(ResearchSpanAttribute.run_id == run_id)
-                )
+
+            research_plans.sort(key=lambda item: int(item.get("round_no") or 0))
+            evidence_items.sort(key=lambda item: int(item.get("round_no") or 0))
+            round_reviews.sort(key=lambda item: int(item.get("round_no") or 0))
+
+            # Token 唯一事实源：research_llm_call。research_stage_usage 只是可重建投影。
+            llm_calls = (
+                await session.scalars(select(ResearchLlmCall).where(ResearchLlmCall.run_id == run_id))
             ).all()
             seen_lens: set[str] = set()
-            for sa in span_rows:
-                rno = sa.round_no or 0
-                if sa.attr_value_num is not None:
-                    value: Any = float(sa.attr_value_num)
-                elif sa.attr_value_str is not None:
-                    value = sa.attr_value_str
-                elif sa.attr_value_json:
-                    try:
-                        value = json.loads(sa.attr_value_json) or {}
-                    except Exception:  # noqa: BLE001
-                        continue
-                else:
-                    continue
-                if sa.span_scope == "UltraDynamicReview":
-                    review_attributes.setdefault(rno, {})[sa.attr_key] = value
-                elif sa.span_scope == "UltraReportGate":
-                    report_quality[sa.attr_key] = value
-            # 阶段 token 聚合（research_stage_usage）：
-            # reviewer stage_name 形如 'UltraDynamicReviewer:{lens}'（每 lens 一行），
-            # 用前缀匹配聚合 reviewer_tokens；lens 从 stage_name 后缀或 reviewer_lens 列取。
-            stage_rows = (
-                await session.scalars(
-                    select(ResearchStageUsage).where(
-                        ResearchStageUsage.run_id == run_id,
-                        ResearchStageUsage.stage_name.like("UltraDynamicReviewer%"),
-                    )
-                )
-            ).all()
-            tok_in = 0
-            tok_out = 0
+            reviewer_tokens = 0
             per_round_tokens: dict[int, int] = {}
-            for sr in stage_rows:
-                in_t = int(sr.input_tokens or 0)
-                out_t = int(sr.output_tokens or 0)
-                tok_in += in_t
-                tok_out += out_t
-                rno = sr.round_no or 0
-                per_round_tokens[rno] = per_round_tokens.get(rno, 0) + in_t + out_t
-                lens = sr.reviewer_lens
-                if not lens and sr.stage_name and ":" in sr.stage_name:
-                    lens = sr.stage_name.split(":", 1)[1]
+            for call in llm_calls:
+                stage_name = call.stage_name or ""
+                if not stage_name.startswith("UltraDynamicReviewer"):
+                    continue
+                tokens = int(call.input_tokens or 0) + int(call.output_tokens or 0)
+                reviewer_tokens += tokens
+                rno = call.round_no or 0
+                per_round_tokens[rno] = per_round_tokens.get(rno, 0) + tokens
+                lens = call.reviewer_lens
+                if not lens and ":" in stage_name:
+                    lens = stage_name.split(":", 1)[1]
                 if lens:
                     seen_lens.add(lens)
-            reviewer_tokens = tok_in + tok_out
             reviewer_lenses = sorted(seen_lens)
             run_row["reviewer_tokens"] = reviewer_tokens
             run_row["reviewer_lenses"] = reviewer_lenses
-            # per-round reviewer tokens 回填进 review_attributes，供 round_delta 算 marginal
             for rno, rt in per_round_tokens.items():
                 review_attributes.setdefault(rno, {})["review.tokens"] = rt
-            # review.consensus 来自 span_attribute(UltraDynamicReview)，取最后一轮
+
             last_round = max(review_attributes) if review_attributes else None
             if last_round is not None:
                 run_row["review_consensus"] = review_attributes[last_round].get("review.consensus")
-            # §18 跳转链路：trace_id + report_artifact_id 存进 run_row，供 upsert_score 回填
-            if report_artifact_id is not None:
-                run_row["report_artifact_id"] = report_artifact_id
+            if round_reviews:
+                last_decision = round_reviews[-1]
+                blocking_gaps = list(last_decision.get("blockingGaps") or [])
+                weak_sections = [
+                    item
+                    for item in list(last_decision.get("sectionScoreboard") or [])
+                    if isinstance(item, dict) and item.get("status") != "ready"
+                ]
+                report_quality = {
+                    "report.quality.status": (
+                        "ready"
+                        if last_decision.get("nextAction") == "report" and not blocking_gaps
+                        else "needs_disclosure"
+                    ),
+                    "report.weak.sections.count": len(weak_sections),
+                    "report.blocking.gaps.count": len(blocking_gaps),
+                    "report.blocking.gaps": blocking_gaps,
+                }
+
             cm = (
                 await session.scalars(select(ResearchClaimManifest).where(ResearchClaimManifest.run_id == run_id))
             ).all()
@@ -262,7 +388,13 @@ async def _load_case_context(case_run_id: str) -> EvalContext:
                         "claim_id": row.claim_id,
                         "claim_text": row.claim_text,
                         "importance": row.importance,
-                        "citations": [{"citation_url": row.citation_url, "excerpt": row.citation_excerpt}]
+                        "citations": [
+                            {
+                                "citation_url": row.citation_url,
+                                "excerpt": row.citation_excerpt,
+                                "evidence_id": row.evidence_id,
+                            }
+                        ]
                         if row.citation_url
                         else [],
                     }
@@ -277,13 +409,28 @@ async def _load_case_context(case_run_id: str) -> EvalContext:
             if di:
                 dataset_item = {
                     "query_snapshot": di.query_snapshot,
+                    "task_type": di.task_type,
+                    "language": di.language,
+                    "as_of_date": str(di.as_of_date) if di.as_of_date else None,
                     "required_points_json": json.loads(di.required_points_json) if di.required_points_json else [],
                     "reference_facts_json": json.loads(di.reference_facts_json) if di.reference_facts_json else [],
+                    "forbidden_claims_json": json.loads(di.forbidden_claims_json)
+                    if di.forbidden_claims_json
+                    else [],
+                    "source_policy_json": json.loads(di.source_policy_json) if di.source_policy_json else {},
+                    "evaluation_contract_json": json.loads(di.evaluation_contract_json)
+                    if di.evaluation_contract_json
+                    else {},
                 }
     return EvalContext(
         case_run_id=case_run_id,
         report=report,
         dataset_item=dataset_item,
+        research_brief=research_brief,
+        intent_metadata=intent_metadata,
+        research_plans=research_plans,
+        evidence_items=evidence_items,
+        round_reviews=round_reviews,
         claim_manifest=manifest,
         sources=sources,
         section_artifacts=section_artifacts,
@@ -313,13 +460,11 @@ async def evaluate_case_run(
     evaluators = evaluators or default_evaluators(chat_fn=chat_fn, judge_model=judge_model)
     ctx = await _load_case_context(case_run_id)
     all_results: list[MetricResult] = []
-    # §18 跳转链路：每条 score 直链 trace_id + report_artifact_id（来自 run 行 + report_final artifact）
-    score_trace_id = ctx.run.get("trace_id") if ctx.run else None
-    score_report_artifact_id = ctx.run.get("report_artifact_id") if ctx.run else None
 
-    # 阶段1：普通 evaluator（非 hard_gate）
+    # 阶段1：质量/过程 evaluator。成本依赖 Hard Gate，留到阶段3计算，避免把
+    # 尚未回填的 gate_passed=None 错当成 0。
     for ev in evaluators:
-        if ev.name == "hard_gate":
+        if ev.name in {"hard_gate", "cost_effectiveness"}:
             continue
         try:
             results = await ev.evaluate(ctx)
@@ -340,8 +485,6 @@ async def evaluate_case_run(
                 judge_model=r.judge_model,
                 reason=r.reason,
                 details=r.details,
-                trace_id=score_trace_id,
-                report_artifact_id=score_report_artifact_id,
             )
             ctx.prior_results[r.metric_name] = r
 
@@ -367,8 +510,6 @@ async def evaluate_case_run(
                 judge_model=r.judge_model,
                 reason=r.reason,
                 details=r.details,
-                trace_id=score_trace_id,
-                report_artifact_id=score_report_artifact_id,
             )
             # 回填 eval_case_run.gate_passed + failure_reasons_json（§18 可查询）
             failures = (r.details or {}).get("failure_reason_codes") or []
@@ -380,6 +521,33 @@ async def evaluate_case_run(
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("update_case_run_gate failed case_run=%s", case_run_id)
+            ctx.prior_results[r.metric_name] = r
+            ctx.run["gate_passed"] = int(r.score_value or 0)
+
+    # 阶段3：成本 evaluator。此时 gate_passed 已确定，可正确计算 tokens/cost per pass。
+    cost_evaluators = [e for e in evaluators if e.name == "cost_effectiveness"]
+    for ev in cost_evaluators:
+        try:
+            cost_results = await ev.evaluate(ctx)
+        except Exception:  # noqa: BLE001
+            logger.exception("cost evaluator failed case_run=%s", case_run_id)
+            cost_results = []
+        for r in cost_results:
+            all_results.append(r)
+            await eval_repository.upsert_score(
+                case_run_id=case_run_id,
+                metric_name=r.metric_name,
+                evaluator_name=r.evaluator_name,
+                evaluator_version=r.evaluator_version,
+                metric_group=r.metric_group,
+                score_value=r.score_value,
+                label_value=r.label_value,
+                passed=r.passed,
+                judge_model=r.judge_model,
+                reason=r.reason,
+                details=r.details,
+            )
+            ctx.prior_results[r.metric_name] = r
     return all_results
 
 
@@ -391,8 +559,8 @@ async def run_experiment(
 ) -> dict[str, dict[str, dict[str, float | None]]]:
     """遍历 experiment 下所有 case_run 做评估。
 
-    返回 ``{variant_name: {case_run_id: {metric_name: score}}}``，供
-    ``build_paired_diff_report`` 做跨 variant 配对差值（§18/§19）。
+    返回 ``{variant_name: {dataset_item_id::repeat_no: {metric_name: score}}}``，
+    让不同 Variant 按同一 Item 和 Repeat 做真实配对。
     """
     async with SessionLocal() as session:
         case_runs = (
@@ -403,13 +571,16 @@ async def run_experiment(
         if not cr.run_id:
             continue
         scores = await evaluate_case_run(cr.id, chat_fn=chat_fn, judge_model=judge_model)
-        variant = cr.variant_name or "_unknown"
-        summary.setdefault(variant, {})[cr.id] = {s.metric_name: s.score_value for s in scores}
+        variant = cr.variant_name
+        pair_key = f"{cr.dataset_item_id}::{cr.repeat_no}"
+        summary.setdefault(variant, {})[pair_key] = {
+            score.metric_name: score.score_value for score in scores
+        }
     return summary
 
 
 def _metric_means(runs: dict[str, dict[str, float | None]]) -> dict[str, float]:
-    """对 {case_run_id: {metric: score}} 按 metric 求均值（跳过 None）。"""
+    """对 {pair_key: {metric: score}} 按 metric 求均值（跳过 None）。"""
     buckets: dict[str, list[float]] = {}
     for scores in runs.values():
         for m, v in scores.items():
@@ -418,13 +589,34 @@ def _metric_means(runs: dict[str, dict[str, float | None]]) -> dict[str, float]:
     return {m: round(sum(vs) / len(vs), 4) for m, vs in buckets.items() if vs}
 
 
+def _paired_metric_deltas(
+    low_runs: dict[str, dict[str, float | None]],
+    high_runs: dict[str, dict[str, float | None]],
+) -> dict[str, float]:
+    """只在双方都有同一 Item/Repeat 和 Metric 时计算 high-low。"""
+    buckets: dict[str, list[float]] = {}
+    for pair_key in low_runs.keys() & high_runs.keys():
+        low_scores = low_runs[pair_key]
+        high_scores = high_runs[pair_key]
+        for metric in low_scores.keys() & high_scores.keys():
+            low_value = low_scores[metric]
+            high_value = high_scores[metric]
+            if isinstance(low_value, (int, float)) and isinstance(high_value, (int, float)):
+                buckets.setdefault(metric, []).append(float(high_value) - float(low_value))
+    return {
+        metric: round(sum(values) / len(values), 4)
+        for metric, values in buckets.items()
+        if values
+    }
+
+
 def build_paired_diff_report(
     experiment_summary: dict[str, dict[str, dict[str, float | None]]],
 ) -> str:
     """生成配对差异报告（Markdown，§18/§19 决策输出）。
 
-    experiment_summary: ``{variant_name: {case_run_id: {metric_name: score}}}``。
-    真实计算：① 每 variant 各 metric 均值；② 相邻档位（MEDIUM→HIGH→ULTRA）的 metric 差值；
+    experiment_summary: ``{variant_name: {item_id::repeat_no: {metric_name: score}}}``。
+    真实计算：① 每 variant 各 metric 均值；② 相邻档位仅对共同 Item/Repeat 计算配对差值；
     ③ cost per pass / quality uplift 的决策建议。
     """
     lines = ["# Eval 配对差异报告", ""]
@@ -433,7 +625,12 @@ def build_paired_diff_report(
         return "\n".join(lines)
 
     # ① 每 variant metric 均值
-    means: dict[str, dict[str, float]] = {v: _metric_means(runs) for v, runs in experiment_summary.items()}
+    tier_order = ("MEDIUM", "HIGH", "ULTRA")
+    variants = [variant for variant in tier_order if variant in experiment_summary]
+    variants.extend(sorted(set(experiment_summary) - set(variants)))
+    means: dict[str, dict[str, float]] = {
+        variant: _metric_means(experiment_summary[variant]) for variant in variants
+    }
     all_metrics = sorted({m for vm in means.values() for m in vm})
     lines.append("## 各 Variant 指标均值")
     header = "| Metric | " + " | ".join(means.keys()) + " |"
@@ -447,20 +644,25 @@ def build_paired_diff_report(
     lines.append("")
 
     # ② 相邻档位差值（按 variant 顺序 MEDIUM→HIGH→ULTRA）
-    variants = list(means.keys())
     lines.append("## 相邻档位差值（uplift）")
     if len(variants) >= 2:
         diff_pairs = list(zip(variants[:-1], variants[1:]))
+        paired_deltas = {
+            (low, high): _paired_metric_deltas(
+                experiment_summary[low],
+                experiment_summary[high],
+            )
+            for low, high in diff_pairs
+        }
         pair_labels = [f"{lo}→{hi}" for lo, hi in diff_pairs]
         lines.append("| Metric | " + " | ".join(pair_labels) + " |")
         lines.append("|---|" + "|".join(["---"] * len(diff_pairs)) + "|")
         for m in all_metrics:
             deltas = []
             for lo, hi in diff_pairs:
-                lo_v = means[lo].get(m)
-                hi_v = means[hi].get(m)
-                if lo_v is not None and hi_v is not None:
-                    deltas.append(f"{hi_v - lo_v:+.4f}")
+                delta = paired_deltas[(lo, hi)].get(m)
+                if delta is not None:
+                    deltas.append(f"{delta:+.4f}")
                 else:
                     deltas.append("-")
             lines.append(f"| {m} | {' | '.join(deltas)} |")
@@ -476,26 +678,37 @@ def build_paired_diff_report(
 
     # effective_citation_count 作质量代理，total_cost/cost_per_pass 作成本代理
     quality_metric = next((m for m in all_metrics if "effective_citation" in m or "coverage" in m), None)
-    cost_metric = next((m for m in all_metrics if "cost" in m), None)
+    cost_metric = next(
+        (m for m in ("total_tokens_k", "total_cost") if m in all_metrics),
+        None,
+    )
+    edge_deltas = (
+        _paired_metric_deltas(
+            experiment_summary[variants[0]],
+            experiment_summary[variants[-1]],
+        )
+        if len(variants) >= 2
+        else {}
+    )
     if quality_metric and len(variants) >= 2:
         q_lo = _mean(variants[0], quality_metric)
         q_hi = _mean(variants[-1], quality_metric)
-        if q_lo is not None and q_hi is not None:
+        q_delta = edge_deltas.get(quality_metric)
+        if q_lo is not None and q_hi is not None and q_delta is not None:
             lines.append(
                 f"- 质量代理 `{quality_metric}`：{variants[0]}={q_lo:.4f} → {variants[-1]}={q_hi:.4f}"
-                f"，差值 {q_hi - q_lo:+.4f}"
+                f"，配对差值 {q_delta:+.4f}"
             )
     if cost_metric and len(variants) >= 2:
-        c_lo = _mean(variants[0], cost_metric)
-        c_hi = _mean(variants[-1], cost_metric)
-        if c_lo is not None and c_hi is not None and c_hi > 0:
-            q_lo = _mean(variants[0], quality_metric) or 0
-            q_hi = _mean(variants[-1], quality_metric) or 0
-            if q_hi - q_lo > 0 and c_hi - c_lo > 0:
-                marginal = (q_hi - q_lo) / max(c_hi - c_lo, 1e-9)
+        quality_delta = edge_deltas.get(quality_metric) if quality_metric else None
+        cost_delta = edge_deltas.get(cost_metric)
+        if quality_delta is not None and cost_delta is not None:
+            if quality_delta > 0 and cost_delta > 0:
+                marginal = quality_delta / max(cost_delta, 1e-9)
                 lines.append(
                     f"- 边际质量/成本：升级 {variants[0]}→{variants[-1]}，"
-                    f"质量 +{q_hi - q_lo:.4f} / 成本 +{c_hi - c_lo:.4f} = {marginal:.4f} 质量/单位成本"
+                    f"质量 +{quality_delta:.4f} / 成本 +{cost_delta:.4f} "
+                    f"= {marginal:.4f} 质量/单位成本"
                 )
     lines += [
         "- 哪些 Task Type 在 HIGH/ULTRA 上有正 Uplift？见 `synthesis_uplift` / `quality_delta_per_round`。",

@@ -1,6 +1,8 @@
 {
   "dataset_name": "mvp_v1",
-  "dataset_version": "1",
+  "dataset_version": "2",
+  "purpose": "同题配对回放 MEDIUM/HIGH/ULTRA，并支持结果、过程与机制 Eval",
+  "variants": ["MEDIUM", "HIGH", "ULTRA"],
   "items": [
     {
       "item_id": "fact_lookup_1",
@@ -8,11 +10,55 @@
       "language": "zh",
       "as_of_date": "2026-06-01",
       "query_snapshot": "截至 2026 年第二季度，全球 AI 市场规模约为多少？给出权威来源与口径。",
-      "required_points": ["市场规模数值", "时间口径", "权威来源"],
+      "required_points": [
+        {
+          "criterion_id": "market_size",
+          "text": "给出全球 AI 市场规模数值",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "必须给出数值、单位和统计口径"
+        },
+        {
+          "criterion_id": "time_scope",
+          "text": "说明数据对应的时间口径",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "时间必须与截至 2026 年第二季度的要求一致"
+        },
+        {
+          "criterion_id": "authority",
+          "text": "使用权威来源",
+          "weight": 1,
+          "critical": true,
+          "acceptance": "关键数值至少由一条可追溯的权威来源支持"
+        }
+      ],
       "reference_facts": [],
-      "forbidden_claims": ["未经来源的具体百分比"],
-      "original_budget_level": "MEDIUM",
-      "sample_reason": "事实检索代表题"
+      "forbidden_claims": ["未经来源支持的具体市场规模或百分比"],
+      "source_policy": {
+        "preferred_types": ["official", "report", "academic"],
+        "minimum_authoritative_sources": 1,
+        "time_sensitive": true
+      },
+      "evaluation_contract": {
+        "eligible_variants": ["MEDIUM", "HIGH", "ULTRA"],
+        "expected_intent": {
+          "research_type": "fact_lookup",
+          "should_clarify": false
+        },
+        "constraints": {
+          "require_citations": true,
+          "language": "zh",
+          "as_of_date": "2026-06-01"
+        },
+        "mechanism_tags": {
+          "reviewer_applicable": false,
+          "multi_round_applicable": false,
+          "synthesis_applicable": false
+        }
+      },
+      "sample_reason": "事实检索代表题",
+      "split_name": "test"
     },
     {
       "item_id": "tech_comparison_1",
@@ -20,11 +66,68 @@
       "language": "zh",
       "as_of_date": "2026-06-01",
       "query_snapshot": "对比 RAG 与 Fine-tuning 在企业知识问答场景的优劣，给出选型建议。",
-      "required_points": ["成本", "可维护性", "时效性", "数据安全", "选型建议"],
+      "required_points": [
+        {
+          "criterion_id": "cost",
+          "text": "比较成本",
+          "weight": 1,
+          "critical": false,
+          "acceptance": "至少讨论建设、训练、推理或维护成本中的两个方面"
+        },
+        {
+          "criterion_id": "maintainability",
+          "text": "比较可维护性",
+          "weight": 1,
+          "critical": false,
+          "acceptance": "说明知识更新或系统维护方式的差异"
+        },
+        {
+          "criterion_id": "freshness",
+          "text": "比较知识时效性",
+          "weight": 1,
+          "critical": false,
+          "acceptance": "说明外部知识更新与模型参数更新的差异"
+        },
+        {
+          "criterion_id": "data_security",
+          "text": "比较数据安全",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "讨论数据外发、私有化部署或敏感数据训练风险"
+        },
+        {
+          "criterion_id": "recommendation",
+          "text": "给出企业选型建议",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "建议必须与企业场景和约束绑定，不能只给绝对结论"
+        }
+      ],
       "reference_facts": [],
-      "forbidden_claims": [],
-      "original_budget_level": "HIGH",
-      "sample_reason": "技术比较代表题"
+      "forbidden_claims": ["RAG 或 Fine-tuning 在所有企业场景中都绝对更优"],
+      "source_policy": {
+        "preferred_types": ["official", "academic", "technical_documentation"],
+        "minimum_authoritative_sources": 2,
+        "time_sensitive": false
+      },
+      "evaluation_contract": {
+        "eligible_variants": ["MEDIUM", "HIGH", "ULTRA"],
+        "expected_intent": {
+          "research_type": "tech_comparison",
+          "should_clarify": false
+        },
+        "constraints": {
+          "require_citations": true,
+          "language": "zh"
+        },
+        "mechanism_tags": {
+          "reviewer_applicable": true,
+          "multi_round_applicable": true,
+          "synthesis_applicable": true
+        }
+      },
+      "sample_reason": "技术比较代表题",
+      "split_name": "test"
     },
     {
       "item_id": "market_analysis_1",
@@ -32,11 +135,63 @@
       "language": "zh",
       "as_of_date": "2026-06-01",
       "query_snapshot": "分析 2026 年中国新能源汽车市场的竞争格局与主要风险。",
-      "required_points": ["市场份额", "头部玩家", "价格战风险", "政策风险"],
+      "required_points": [
+        {
+          "criterion_id": "market_share",
+          "text": "分析市场份额或竞争集中度",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "使用有时间口径的市场数据描述竞争格局"
+        },
+        {
+          "criterion_id": "leading_players",
+          "text": "识别头部玩家及其相对位置",
+          "weight": 1,
+          "critical": false,
+          "acceptance": "至少覆盖主要厂商并说明竞争差异"
+        },
+        {
+          "criterion_id": "price_war",
+          "text": "分析价格战风险",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "说明价格压力的原因及其可能影响"
+        },
+        {
+          "criterion_id": "policy_risk",
+          "text": "分析政策风险",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "覆盖与中国市场相关的政策或监管不确定性"
+        }
+      ],
       "reference_facts": [],
-      "forbidden_claims": [],
-      "original_budget_level": "HIGH",
-      "sample_reason": "市场分析代表题"
+      "forbidden_claims": ["没有时间口径的精确市场份额"],
+      "source_policy": {
+        "preferred_types": ["official", "report", "authoritative_media"],
+        "minimum_authoritative_sources": 2,
+        "time_sensitive": true
+      },
+      "evaluation_contract": {
+        "eligible_variants": ["MEDIUM", "HIGH", "ULTRA"],
+        "expected_intent": {
+          "research_type": "market_analysis",
+          "should_clarify": false
+        },
+        "constraints": {
+          "require_citations": true,
+          "language": "zh",
+          "region": "中国",
+          "as_of_date": "2026-06-01"
+        },
+        "mechanism_tags": {
+          "reviewer_applicable": true,
+          "multi_round_applicable": true,
+          "synthesis_applicable": true
+        }
+      },
+      "sample_reason": "市场分析代表题",
+      "split_name": "test"
     },
     {
       "item_id": "academic_review_1",
@@ -44,11 +199,63 @@
       "language": "zh",
       "as_of_date": "2026-06-01",
       "query_snapshot": "综述 Retrieval-Augmented Generation 在长上下文场景的研究进展与未解问题。",
-      "required_points": ["核心方法", "benchmark", "未解问题", "代表性论文"],
+      "required_points": [
+        {
+          "criterion_id": "methods",
+          "text": "总结核心方法",
+          "weight": 1,
+          "critical": false,
+          "acceptance": "覆盖长上下文与 RAG 结合的主要方法类别"
+        },
+        {
+          "criterion_id": "benchmarks",
+          "text": "讨论代表性 Benchmark",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "说明 Benchmark 评价对象或局限，不能只列名称"
+        },
+        {
+          "criterion_id": "open_problems",
+          "text": "总结未解问题",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "至少讨论可靠性、效率、检索或评价中的两个问题"
+        },
+        {
+          "criterion_id": "papers",
+          "text": "引用代表性论文",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "关键方法和结论必须连接到可追溯的论文来源"
+        }
+      ],
       "reference_facts": [],
-      "forbidden_claims": [],
-      "original_budget_level": "ULTRA",
-      "sample_reason": "学术综述代表题"
+      "forbidden_claims": ["无法追溯到论文的具体实验结论"],
+      "source_policy": {
+        "preferred_types": ["academic", "official"],
+        "minimum_authoritative_sources": 3,
+        "time_sensitive": true
+      },
+      "evaluation_contract": {
+        "eligible_variants": ["MEDIUM", "HIGH", "ULTRA"],
+        "expected_intent": {
+          "research_type": "academic_review",
+          "should_clarify": false
+        },
+        "constraints": {
+          "require_citations": true,
+          "language": "zh",
+          "as_of_date": "2026-06-01"
+        },
+        "mechanism_tags": {
+          "reviewer_applicable": true,
+          "multi_round_applicable": true,
+          "synthesis_applicable": true,
+          "section_team_applicable": true
+        }
+      },
+      "sample_reason": "学术综述代表题",
+      "split_name": "test"
     },
     {
       "item_id": "trend_forecast_1",
@@ -56,11 +263,63 @@
       "language": "zh",
       "as_of_date": "2026-06-01",
       "query_snapshot": "预测 2026 下半年 AI Agent 在企业落地的趋势与最大不确定性。",
-      "required_points": ["趋势", "驱动因素", "最大不确定性", "时间口径"],
+      "required_points": [
+        {
+          "criterion_id": "trends",
+          "text": "提出主要趋势",
+          "weight": 1,
+          "critical": false,
+          "acceptance": "趋势必须有当前证据或驱动因素支撑"
+        },
+        {
+          "criterion_id": "drivers",
+          "text": "解释驱动因素",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "说明技术、成本、组织或监管驱动中的至少两个"
+        },
+        {
+          "criterion_id": "uncertainty",
+          "text": "说明最大不确定性",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "明确区分已知事实、推断和预测"
+        },
+        {
+          "criterion_id": "time_scope",
+          "text": "保持 2026 下半年的时间口径",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "不得把长期趋势直接当作 2026 下半年结论"
+        }
+      ],
       "reference_facts": [],
       "forbidden_claims": ["把预测表述为既定事实"],
-      "original_budget_level": "ULTRA",
-      "sample_reason": "趋势预测代表题"
+      "source_policy": {
+        "preferred_types": ["official", "report", "authoritative_media"],
+        "minimum_authoritative_sources": 2,
+        "time_sensitive": true
+      },
+      "evaluation_contract": {
+        "eligible_variants": ["MEDIUM", "HIGH", "ULTRA"],
+        "expected_intent": {
+          "research_type": "trend_forecast",
+          "should_clarify": false
+        },
+        "constraints": {
+          "require_citations": true,
+          "language": "zh",
+          "as_of_date": "2026-06-01"
+        },
+        "mechanism_tags": {
+          "reviewer_applicable": true,
+          "multi_round_applicable": true,
+          "synthesis_applicable": true,
+          "uncertainty_calibration_required": true
+        }
+      },
+      "sample_reason": "趋势预测代表题",
+      "split_name": "test"
     },
     {
       "item_id": "evidence_conflict_1",
@@ -68,11 +327,65 @@
       "language": "zh",
       "as_of_date": "2026-06-01",
       "query_snapshot": "关于某公司 2025 年营收增长，公开来源口径不一致，给出 reconciled 结论与可信度标注。",
-      "required_points": ["冲突口径", "reconciled 结论", "可信度标注", "数据来源"],
+      "required_points": [
+        {
+          "criterion_id": "conflicting_definitions",
+          "text": "说明不同来源的冲突口径",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "指出数值、统计期或会计口径中的具体差异"
+        },
+        {
+          "criterion_id": "reconciled_conclusion",
+          "text": "给出 Reconciled 结论",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "结论必须说明采用或排除某一口径的理由"
+        },
+        {
+          "criterion_id": "confidence",
+          "text": "标注结论可信度",
+          "weight": 2,
+          "critical": true,
+          "acceptance": "可信度必须与证据冲突程度一致"
+        },
+        {
+          "criterion_id": "sources",
+          "text": "展示冲突数据来源",
+          "weight": 1,
+          "critical": true,
+          "acceptance": "至少展示两个产生冲突的可追溯来源"
+        }
+      ],
       "reference_facts": [],
-      "forbidden_claims": ["回避冲突只引单一来源"],
-      "original_budget_level": "ULTRA",
-      "sample_reason": "证据冲突/不足代表题"
+      "forbidden_claims": ["回避冲突只引用单一来源", "把存在冲突的数值表述为完全确定"],
+      "source_policy": {
+        "preferred_types": ["official", "filing", "report"],
+        "minimum_authoritative_sources": 2,
+        "time_sensitive": true,
+        "require_cross_source_comparison": true
+      },
+      "evaluation_contract": {
+        "eligible_variants": ["MEDIUM", "HIGH", "ULTRA"],
+        "expected_intent": {
+          "research_type": "academic_review",
+          "should_clarify": true
+        },
+        "constraints": {
+          "require_citations": true,
+          "language": "zh",
+          "as_of_date": "2026-06-01"
+        },
+        "mechanism_tags": {
+          "reviewer_applicable": true,
+          "multi_round_applicable": true,
+          "synthesis_applicable": true,
+          "section_team_applicable": true,
+          "evidence_conflict_expected": true
+        }
+      },
+      "sample_reason": "证据冲突/不足代表题",
+      "split_name": "test"
     }
   ]
 }

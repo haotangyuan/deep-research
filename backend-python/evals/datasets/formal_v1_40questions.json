@@ -1,0 +1,764 @@
+{
+  "dataset_name": "deep_research_formal_v1",
+  "dataset_version": "1",
+  "purpose": "40 道正式端到端题目，同题配对评测 MEDIUM/HIGH/ULTRA；机制实验直接从本集合抽样",
+  "variants": ["MEDIUM", "HIGH", "ULTRA"],
+  "experiment_design": {
+    "tier_comparison_repeats": 1,
+    "mechanism_ablation_repeats": 1,
+    "paired_by_item": true,
+    "fixed_across_variants": ["query_snapshot", "as_of_date", "source_policy", "required_points", "reference_facts", "forbidden_claims"],
+    "aggregation": ["macro_by_task_type", "macro_by_difficulty", "paired_item_delta", "bootstrap_confidence_interval"]
+  },
+  "defaults": {
+    "language": "zh",
+    "as_of_date": "2025-01-01",
+    "source_policy": {
+      "preferred_types": ["official", "academic", "filing", "standards_body", "reputable_research"],
+      "minimum_authoritative_sources": 3,
+      "time_sensitive": false,
+      "require_cross_source_comparison": true
+    },
+    "evaluation_contract": {
+      "eligible_variants": ["MEDIUM", "HIGH", "ULTRA"],
+      "constraints": {
+        "require_citations": true,
+        "language": "zh"
+      },
+      "mechanism_tags": {
+        "reviewer_applicable": false,
+        "multi_round_applicable": false,
+        "synthesis_applicable": false,
+        "section_team_applicable": false,
+        "claim_verifier_applicable": false
+      }
+    },
+    "privacy_status": "privacy_reviewed",
+    "annotation_status": "ready",
+    "split_name": "test"
+  },
+  "mechanism_suites": {
+    "high_report_ablation": ["fv1_tc_03", "fv1_tc_06", "fv1_tc_07", "fv1_mkt_01", "fv1_mkt_03", "fv1_mkt_05", "fv1_ar_04", "fv1_tf_04"],
+    "reviewer_ablation": ["fv1_mkt_03", "fv1_mkt_04", "fv1_ar_01", "fv1_ar_02", "fv1_tf_01", "fv1_tf_03", "fv1_ec_01", "fv1_ec_03", "fv1_ec_05", "fv1_ec_06"],
+    "multi_round_ablation": ["fv1_mkt_03", "fv1_ar_01", "fv1_ar_02", "fv1_tf_01", "fv1_tf_03", "fv1_tf_05", "fv1_ec_01", "fv1_ec_03", "fv1_ec_05", "fv1_ec_06"],
+    "section_team_ablation": ["fv1_mkt_01", "fv1_mkt_03", "fv1_ar_01", "fv1_ar_02", "fv1_tf_01", "fv1_ec_05"],
+    "claim_verifier_ablation": ["fv1_fact_01", "fv1_fact_03", "fv1_fact_06", "fv1_mkt_04", "fv1_ec_01", "fv1_ec_03", "fv1_ec_05", "fv1_ec_06"]
+  },
+  "items": [
+    {
+      "item_id": "fv1_fact_01",
+      "task_type": "fact_lookup",
+      "split_name": "calibration",
+      "query_snapshot": "截至 2025 年 1 月 1 日，梳理欧盟《人工智能法案》的生效和分阶段适用时间线，并说明通用人工智能模型提供者最先需要关注的义务。只引用欧盟官方材料作为关键时间节点依据。",
+      "required_points": [
+        {"criterion_id": "timeline", "text": "给出法案生效及主要分阶段适用时间点", "weight": 3, "critical": true, "acceptance": "至少区分生效、首批规则、GPAI 义务和全面适用，不混淆通过与适用日期"},
+        {"criterion_id": "gpai_scope", "text": "说明 GPAI 提供者需要关注的义务类型", "weight": 2, "critical": true, "acceptance": "覆盖技术文档、下游信息、版权政策或系统性风险义务，并区分一般模型与系统性风险模型"},
+        {"criterion_id": "official_basis", "text": "关键时间点使用欧盟官方来源", "weight": 2, "critical": true, "acceptance": "时间线应由欧盟委员会、欧盟公报或法案正文支持"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "法案生效、规则适用和执法不是同一个时间点，必须分开表述", "importance": "critical"},
+        {"fact_id": "f2", "text": "GPAI 模型义务与具有系统性风险的 GPAI 模型额外义务应当区分", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把法案公布、正式生效和全部条款适用写成同一天", "声称所有 AI 系统承担完全相同的义务"],
+      "source_policy": {"preferred_types": ["official"], "minimum_authoritative_sources": 2, "time_sensitive": true, "require_cross_source_comparison": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "fact_lookup", "should_clarify": false}, "strata": {"difficulty": "medium", "domain": "regulation"}},
+      "sample_reason": "官方时间线与法律口径事实题"
+    },
+    {
+      "item_id": "fv1_fact_02",
+      "task_type": "fact_lookup",
+      "split_name": "calibration",
+      "query_snapshot": "基于 NIST 官方文件，解释 AI RMF 1.0 的四个核心功能，以及 Generative AI Profile 如何在不替代 AI RMF 的前提下补充生成式 AI 风险管理。给出企业落地时可直接使用的对应关系。",
+      "required_points": [
+        {"criterion_id": "four_functions", "text": "准确解释 Govern、Map、Measure、Manage", "weight": 3, "critical": true, "acceptance": "说明四个功能的作用及其相互关系，不能只列名称"},
+        {"criterion_id": "profile_relation", "text": "解释 GenAI Profile 与 AI RMF 的关系", "weight": 2, "critical": true, "acceptance": "明确 Profile 是配套实施资源而不是新的替代框架"},
+        {"criterion_id": "enterprise_mapping", "text": "给出企业控制活动映射", "weight": 2, "critical": false, "acceptance": "每个核心功能至少对应一类可执行治理活动"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "AI RMF Core 包含 Govern、Map、Measure、Manage 四个功能", "importance": "critical"},
+        {"fact_id": "f2", "text": "Generative AI Profile 是 AI RMF 的跨行业配套资源，不取代 AI RMF 1.0", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把 GenAI Profile 描述为具有强制法律效力的法规", "杜撰 NIST 未定义的第五个核心功能"],
+      "source_policy": {"preferred_types": ["official", "standards_body"], "minimum_authoritative_sources": 2},
+      "evaluation_contract": {"expected_intent": {"research_type": "fact_lookup", "should_clarify": false}, "strata": {"difficulty": "easy", "domain": "ai_governance"}},
+      "sample_reason": "标准框架事实与落地映射题"
+    },
+    {
+      "item_id": "fv1_fact_03",
+      "task_type": "fact_lookup",
+      "query_snapshot": "核对 2023 年全球发电结构中煤炭、天然气、水电、核电、风电和太阳能的大致占比。解释不同权威数据源出现小幅差异的原因，并明确你采用的统计口径。",
+      "required_points": [
+        {"criterion_id": "shares", "text": "给出六类电源的大致发电占比", "weight": 3, "critical": true, "acceptance": "数值、年份和单位完整，且与所引来源在合理误差内一致"},
+        {"criterion_id": "scope", "text": "说明全球总发电量和能源分类口径", "weight": 2, "critical": true, "acceptance": "说明是发电量而非装机容量，并交代风光是否单列"},
+        {"criterion_id": "difference", "text": "解释来源差异", "weight": 2, "critical": false, "acceptance": "至少讨论数据修订、分类方式、估算覆盖或四舍五入"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "发电量占比与装机容量占比不是同一指标", "importance": "critical"},
+        {"fact_id": "f2", "text": "煤炭在 2023 年全球发电结构中仍是最大单一来源，风电和太阳能合计占比显著低于全部化石燃料", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把装机容量占比当作发电量占比", "混用不同年份的数据后直接加总"],
+      "source_policy": {"preferred_types": ["official", "reputable_research"], "minimum_authoritative_sources": 2, "require_cross_source_comparison": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "fact_lookup", "should_clarify": false}, "strata": {"difficulty": "hard", "domain": "energy"}},
+      "sample_reason": "多源数字口径核验题"
+    },
+    {
+      "item_id": "fv1_fact_04",
+      "task_type": "fact_lookup",
+      "query_snapshot": "解释 RISC-V ISA 的开放许可、RISC-V International 的治理角色，以及“开放指令集”为什么不等于所有 RISC-V 芯片设计都开源。面向需要评估供应链风险的技术管理者。",
+      "required_points": [
+        {"criterion_id": "isa_license", "text": "解释开放 ISA 的含义", "weight": 2, "critical": true, "acceptance": "说明开放的是指令集规范及其使用权，而不是自动开放所有实现"},
+        {"criterion_id": "governance", "text": "说明 RISC-V International 的治理和规范角色", "weight": 2, "critical": true, "acceptance": "覆盖规范维护、扩展批准或兼容生态角色"},
+        {"criterion_id": "implementation", "text": "区分开放 ISA 与芯片实现知识产权", "weight": 3, "critical": true, "acceptance": "明确微架构、核心设计、SoC 和工具链可以采用不同许可证"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "RISC-V 是开放标准 ISA，具体处理器核心和 SoC 实现可为开源或专有", "importance": "critical"},
+        {"fact_id": "f2", "text": "规范兼容不代表不同实现拥有相同的性能、安全特征或供应链条件", "importance": "critical"}
+      ],
+      "forbidden_claims": ["声称所有 RISC-V 芯片源代码都必须公开", "把 ISA 许可等同于免除所有第三方专利风险"],
+      "evaluation_contract": {"expected_intent": {"research_type": "fact_lookup", "should_clarify": false}, "strata": {"difficulty": "easy", "domain": "semiconductor"}},
+      "sample_reason": "概念边界与供应链事实题"
+    },
+    {
+      "item_id": "fv1_fact_05",
+      "task_type": "fact_lookup",
+      "query_snapshot": "基于 PostgreSQL 官方文档，说明物理流复制和逻辑复制在复制粒度、目标端可写性、版本兼容、DDL 处理和典型用途上的差异。结论限定在 PostgreSQL 16/17。",
+      "required_points": [
+        {"criterion_id": "granularity", "text": "比较 WAL 物理复制与发布订阅式逻辑复制", "weight": 2, "critical": true, "acceptance": "准确说明复制层级和可选择对象差异"},
+        {"criterion_id": "operations", "text": "比较目标端、版本与 DDL 限制", "weight": 3, "critical": true, "acceptance": "不得把逻辑复制描述为自动复制所有 DDL，也不得忽略冲突和序列等限制"},
+        {"criterion_id": "use_cases", "text": "给出适用场景", "weight": 2, "critical": false, "acceptance": "至少区分高可用/灾备与选择性迁移/数据分发"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "物理流复制传输 WAL 并复制整个数据库集群层面的变化", "importance": "critical"},
+        {"fact_id": "f2", "text": "逻辑复制使用发布与订阅模型，可选择表，但 schema/DDL 同步存在明确限制", "importance": "critical"}
+      ],
+      "forbidden_claims": ["声称逻辑复制自动同步所有 DDL 和序列状态", "声称物理复制可以任意选择单表"],
+      "source_policy": {"preferred_types": ["official"], "minimum_authoritative_sources": 2},
+      "evaluation_contract": {"expected_intent": {"research_type": "fact_lookup", "should_clarify": false}, "strata": {"difficulty": "easy", "domain": "database"}},
+      "sample_reason": "版本受限的官方文档事实题"
+    },
+    {
+      "item_id": "fv1_fact_06",
+      "task_type": "fact_lookup",
+      "query_snapshot": "梳理中国个人信息出境的主要合规路径，比较安全评估、个人信息出境标准合同和个人信息保护认证的适用逻辑，并说明 2024 年相关规定带来的豁免或门槛变化。不要提供个案法律意见。",
+      "required_points": [
+        {"criterion_id": "paths", "text": "说明三类主要合规路径", "weight": 3, "critical": true, "acceptance": "准确区分安全评估、标准合同和认证的性质与适用条件"},
+        {"criterion_id": "thresholds", "text": "说明门槛和豁免逻辑", "weight": 3, "critical": true, "acceptance": "基于有效官方规定讨论数量门槛、重要数据和特定场景豁免"},
+        {"criterion_id": "scope_notice", "text": "说明一般信息用途与限制", "weight": 1, "critical": false, "acceptance": "明确最终判断依赖数据类型、数量和处理者身份"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "三种路径不是企业可以在所有情形下任意选择，安全评估在特定条件下具有优先适用性", "importance": "critical"},
+        {"fact_id": "f2", "text": "重要数据与敏感个人信息需要和普通个人信息分别判断", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把一般性梳理表述为确定的个案法律结论", "忽略重要数据和敏感个人信息的区别"],
+      "source_policy": {"preferred_types": ["official"], "minimum_authoritative_sources": 3, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "fact_lookup", "should_clarify": false}, "strata": {"difficulty": "medium", "domain": "privacy_regulation"}},
+      "sample_reason": "法规门槛与例外核验题"
+    },
+    {
+      "item_id": "fv1_tc_01",
+      "task_type": "tech_comparison",
+      "split_name": "calibration",
+      "query_snapshot": "一家日均写入 2TB、RPO 低于 5 分钟的 SaaS 公司要为 PostgreSQL 设计跨区域灾备。比较物理流复制、逻辑复制和基于对象存储的持续归档恢复，给出分层方案和演练建议。",
+      "required_points": [
+        {"criterion_id": "rpo_rto", "text": "比较三种方案的 RPO/RTO 和故障模式", "weight": 3, "critical": true, "acceptance": "结合给定写入量和 RPO 说明同步链路、归档延迟与恢复时间"},
+        {"criterion_id": "operational_risk", "text": "比较运维复杂度和一致性风险", "weight": 2, "critical": true, "acceptance": "覆盖复制槽/WAL 保留、跨版本、网络分区或恢复验证"},
+        {"criterion_id": "recommendation", "text": "给出分层灾备方案", "weight": 3, "critical": true, "acceptance": "包含主路径、不可变备份、演练频率和切换/回切原则"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "复制不能替代能够抵御逻辑错误和恶意删除的独立备份", "importance": "critical"},
+        {"fact_id": "f2", "text": "RPO 与 RTO 需要分别评价，低复制延迟不代表恢复流程一定快速", "importance": "critical"}
+      ],
+      "forbidden_claims": ["承诺任何单一复制技术可以实现零数据丢失且无需演练"],
+      "evaluation_contract": {"expected_intent": {"research_type": "tech_comparison", "should_clarify": false}, "strata": {"difficulty": "medium", "domain": "database_reliability"}},
+      "sample_reason": "约束明确的架构决策题"
+    },
+    {
+      "item_id": "fv1_tc_02",
+      "task_type": "tech_comparison",
+      "split_name": "calibration",
+      "query_snapshot": "比较 Kubernetes HPA、VPA 和 KEDA 在事件驱动异步任务平台中的作用。平台同时有 CPU 密集 API、Kafka 消费者和偶发批任务，请设计组合使用方案并指出冲突和失效场景。",
+      "required_points": [
+        {"criterion_id": "mechanisms", "text": "解释 HPA、VPA、KEDA 的控制信号与作用对象", "weight": 3, "critical": true, "acceptance": "区分副本数扩缩、资源请求建议/调整和外部事件指标扩缩"},
+        {"criterion_id": "combination", "text": "按三类工作负载设计组合", "weight": 3, "critical": true, "acceptance": "对 API、消费者和批任务分别给出可执行选择"},
+        {"criterion_id": "conflicts", "text": "说明冲突与稳定性风险", "weight": 2, "critical": true, "acceptance": "讨论 HPA/VPA 资源指标相互作用、冷启动、队列滞后或缩容安全"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "HPA 主要调整副本数量，VPA 主要调整或建议 Pod 资源请求，KEDA 通过事件源驱动扩缩", "importance": "critical"},
+        {"fact_id": "f2", "text": "HPA 与 VPA 同时基于 CPU/内存时可能产生控制回路相互影响", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把 KEDA 描述为完全独立于 Kubernetes HPA 的调度器", "忽略从零扩容的冷启动影响"],
+      "evaluation_contract": {"expected_intent": {"research_type": "tech_comparison", "should_clarify": false}, "strata": {"difficulty": "easy", "domain": "cloud_native"}},
+      "sample_reason": "多组件组合与冲突分析题"
+    },
+    {
+      "item_id": "fv1_tc_03",
+      "task_type": "tech_comparison",
+      "query_snapshot": "为 5000 万份中英文企业文档的 RAG 平台比较 pgvector、Milvus 和 Elasticsearch/OpenSearch 向量检索。要求讨论混合检索、过滤、更新一致性、扩展成本、运维能力和迁移风险，并分别给出初创团队与大型企业建议。",
+      "required_points": [
+        {"criterion_id": "retrieval", "text": "比较向量、关键词、混合检索与过滤能力", "weight": 3, "critical": true, "acceptance": "不能只比较 ANN 算法，必须覆盖文本检索和结构化过滤"},
+        {"criterion_id": "scale_ops", "text": "比较规模、更新和运维", "weight": 3, "critical": true, "acceptance": "结合 5000 万文档讨论分片、索引构建、备份、监控和团队能力"},
+        {"criterion_id": "recommendations", "text": "给出两类组织的条件化建议", "weight": 3, "critical": true, "acceptance": "建议应与已有技术栈、检索需求和运维成本关联"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "向量数据库选型不能仅由向量数量决定，过滤选择性、更新模式和混合检索同样关键", "importance": "critical"},
+        {"fact_id": "f2", "text": "产品能力会随版本变化，必须给出版本或检索日期并区分原生能力与插件能力", "importance": "critical"}
+      ],
+      "forbidden_claims": ["在没有工作负载基准的情况下宣称某产品必然性能最好", "把三种系统描述为完全等价的替换品"],
+      "source_policy": {"preferred_types": ["official", "academic", "reputable_research"], "minimum_authoritative_sources": 4, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "tech_comparison", "should_clarify": false}, "strata": {"difficulty": "hard", "domain": "rag_infrastructure"}},
+      "sample_reason": "多维度高规模技术选型题"
+    },
+    {
+      "item_id": "fv1_tc_04",
+      "task_type": "tech_comparison",
+      "query_snapshot": "比较 Apache Kafka、Apache Pulsar 和 NATS JetStream 用于跨地域事件平台时的架构取舍。重点讨论消息语义、顺序、保留、租户隔离、跨集群复制、运维复杂度和客户端生态。",
+      "required_points": [
+        {"criterion_id": "semantics", "text": "比较消息语义、顺序和消费模型", "weight": 3, "critical": true, "acceptance": "准确区分至少一次、去重/幂等、分区或主题内顺序以及消费者状态"},
+        {"criterion_id": "geo_storage", "text": "比较保留架构和跨地域能力", "weight": 2, "critical": true, "acceptance": "说明存储模型、复制机制及故障恢复影响"},
+        {"criterion_id": "operations", "text": "比较多租户、运维和生态", "weight": 2, "critical": false, "acceptance": "不能只罗列功能，需说明组织能力和迁移成本"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "消息顺序通常具有分区、流或消费者范围，不能笼统声称全局严格有序", "importance": "critical"},
+        {"fact_id": "f2", "text": "端到端 exactly-once 依赖生产者、Broker、消费者和外部副作用的共同设计", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把任一系统的 exactly-once 宣称扩大成所有外部副作用的绝对一次", "忽略跨地域网络分区的取舍"],
+      "evaluation_contract": {"expected_intent": {"research_type": "tech_comparison", "should_clarify": false}, "strata": {"difficulty": "hard", "domain": "messaging"}},
+      "sample_reason": "分布式语义与运维权衡题"
+    },
+    {
+      "item_id": "fv1_tc_05",
+      "task_type": "tech_comparison",
+      "query_snapshot": "一家使用三家云和部分本地机房的金融科技公司，应该采用 OpenTelemetry 统一采集后端，还是继续使用各 APM 厂商专有 Agent？比较可移植性、数据质量、自动插桩、成本、治理和迁移路径。",
+      "required_points": [
+        {"criterion_id": "architecture", "text": "比较 OTel 标准化管线与专有 Agent", "weight": 3, "critical": true, "acceptance": "区分 API/SDK、Collector、语义约定、后端与厂商专有能力"},
+        {"criterion_id": "tradeoffs", "text": "比较数据质量、覆盖和成本", "weight": 2, "critical": true, "acceptance": "同时讨论可移植性收益和自动插桩/诊断深度差距"},
+        {"criterion_id": "migration", "text": "给出渐进迁移和治理方案", "weight": 3, "critical": true, "acceptance": "包含双写/抽样验证、属性治理、PII 控制和回退策略"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "OpenTelemetry 负责遥测信号的生成、处理和导出，不等同于完整的存储分析后端", "importance": "critical"},
+        {"fact_id": "f2", "text": "使用开放协议不能自动消除语义约定、属性基数和供应商扩展造成的锁定", "importance": "critical"}
+      ],
+      "forbidden_claims": ["声称采用 OpenTelemetry 后完全不需要可观测性后端", "忽略敏感属性与高基数成本"],
+      "evaluation_contract": {"expected_intent": {"research_type": "tech_comparison", "should_clarify": false}, "strata": {"difficulty": "medium", "domain": "observability"}},
+      "sample_reason": "标准与专有能力迁移题"
+    },
+    {
+      "item_id": "fv1_tc_06",
+      "task_type": "tech_comparison",
+      "query_snapshot": "比较 Apache Iceberg、Delta Lake 和 Apache Hudi 用于对象存储 Lakehouse 的能力。重点评价并发写入、表演进、增量处理、流批一体、引擎生态、治理和从 Hive 表迁移的风险。",
+      "required_points": [
+        {"criterion_id": "table_features", "text": "比较事务、表演进和并发", "weight": 3, "critical": true, "acceptance": "基于当前稳定能力区分格式规范、实现组件和目录服务依赖"},
+        {"criterion_id": "incremental", "text": "比较增量与流批工作负载", "weight": 2, "critical": true, "acceptance": "说明变更捕获、合并写、时间旅行或增量读取的差异"},
+        {"criterion_id": "ecosystem_migration", "text": "评价生态和迁移路径", "weight": 3, "critical": true, "acceptance": "覆盖计算引擎兼容、元数据迁移、回滚、双写验证和锁定风险"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "开放表格式与具体计算引擎、Catalog 和商业平台不是同一层", "importance": "critical"},
+        {"fact_id": "f2", "text": "功能支持可能因引擎和版本而不同，不能仅根据格式规范推断所有实现都已支持", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把某一厂商平台能力无条件归因于开放格式本身", "宣称迁移只需修改文件扩展名"],
+      "source_policy": {"preferred_types": ["official", "academic", "reputable_research"], "minimum_authoritative_sources": 4, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "tech_comparison", "should_clarify": false}, "strata": {"difficulty": "hard", "domain": "data_platform"}},
+      "sample_reason": "多生态表格式选型题"
+    },
+    {
+      "item_id": "fv1_tc_07",
+      "task_type": "tech_comparison",
+      "query_snapshot": "为需要私有化部署中文大模型的企业比较 vLLM、Hugging Face TGI 和 Ollama。场景包含生产 API、开发者本地试验和离线批处理；要求讨论吞吐、延迟、模型兼容、量化、多 GPU、可观测性和安全治理。",
+      "required_points": [
+        {"criterion_id": "workload_fit", "text": "按三种工作负载比较适配性", "weight": 3, "critical": true, "acceptance": "分别评价生产在线、本地开发和离线批处理，不能给出单一绝对排名"},
+        {"criterion_id": "serving_features", "text": "比较服务和硬件能力", "weight": 3, "critical": true, "acceptance": "讨论调度/批处理、模型格式、量化、多 GPU 和版本限制"},
+        {"criterion_id": "governance", "text": "比较生产治理能力", "weight": 2, "critical": true, "acceptance": "覆盖鉴权、隔离、审计、监控和镜像/模型供应链"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "本地开发便利性、生产吞吐和企业治理是不同优化目标", "importance": "critical"},
+        {"fact_id": "f2", "text": "模型与量化格式支持高度依赖具体版本和硬件，结论必须标注版本边界", "importance": "critical"}
+      ],
+      "forbidden_claims": ["不提供基准条件便宣称某框架吞吐固定高出若干倍", "把工具默认本地监听误写成完整企业安全方案"],
+      "source_policy": {"preferred_types": ["official", "reputable_research"], "minimum_authoritative_sources": 4, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "tech_comparison", "should_clarify": false}, "strata": {"difficulty": "hard", "domain": "llm_inference"}},
+      "sample_reason": "快速变化的多场景推理框架题"
+    },
+    {
+      "item_id": "fv1_tc_08",
+      "task_type": "tech_comparison",
+      "query_snapshot": "比较 Kong Gateway、Envoy Gateway 和 NGINX 作为 Kubernetes 南北向 API 网关的选择。团队只有 5 名平台工程师，需要多租户、OIDC、限流、渐进发布和可观测性；给出两年总拥有成本框架，而不是虚构价格。",
+      "required_points": [
+        {"criterion_id": "capabilities", "text": "比较网关核心能力及实现方式", "weight": 3, "critical": true, "acceptance": "覆盖路由、认证、限流、发布和遥测，并区分开源、插件与商业能力"},
+        {"criterion_id": "operability", "text": "结合小团队评价运维复杂度", "weight": 2, "critical": true, "acceptance": "考虑控制面、升级、策略管理、调试和人才成本"},
+        {"criterion_id": "tco", "text": "给出两年 TCO 计算框架", "weight": 2, "critical": false, "acceptance": "包含基础设施、许可、实施、值班和迁移成本，不虚构报价"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "同名功能可能分别由核心、扩展、外部身份组件或商业控制面实现", "importance": "critical"},
+        {"fact_id": "f2", "text": "开源许可成本为零不代表两年总拥有成本为零", "importance": "critical"}
+      ],
+      "forbidden_claims": ["在没有询价依据时给出确定商业许可价格", "把 Ingress/API Gateway/Gateway API 概念完全混同"],
+      "evaluation_contract": {"expected_intent": {"research_type": "tech_comparison", "should_clarify": false}, "strata": {"difficulty": "easy", "domain": "api_infrastructure"}},
+      "sample_reason": "小团队能力与 TCO 决策题"
+    },
+    {
+      "item_id": "fv1_mkt_01",
+      "task_type": "market_analysis",
+      "split_name": "calibration",
+      "query_snapshot": "为一家受欧盟监管、计划采购生成式 AI 平台的银行分析“主权云/数据主权”供应市场。比较超大规模云、本地私有化和欧洲主权云合作模式，不做厂商营销汇总，要给出采购评分框架。",
+      "required_points": [
+        {"criterion_id": "market_models", "text": "区分三类供应和交付模式", "weight": 2, "critical": true, "acceptance": "说明运营控制、数据位置、人员访问、密钥和法律管辖的差异"},
+        {"criterion_id": "regulatory_fit", "text": "分析银行监管与数据治理要求", "weight": 3, "critical": true, "acceptance": "覆盖外包/集中风险、退出、审计、韧性和跨境访问，不把数据驻留等同完整合规"},
+        {"criterion_id": "scorecard", "text": "给出可执行采购评分框架", "weight": 3, "critical": true, "acceptance": "至少包含控制权、模型能力、迁移性、成本、证据和退出测试"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "数据驻留、数据主权、运营主权和技术主权是相关但不同的概念", "importance": "critical"},
+        {"fact_id": "f2", "text": "监管行业的云采购需要评估集中风险、审计权与可测试退出计划", "importance": "critical"}
+      ],
+      "forbidden_claims": ["仅凭数据中心位于欧盟便断言满足全部监管要求", "把厂商自称主权云当作独立合规证明"],
+      "source_policy": {"preferred_types": ["official", "filing", "standards_body", "reputable_research"], "minimum_authoritative_sources": 5, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "market_analysis", "should_clarify": false}, "strata": {"difficulty": "hard", "domain": "cloud_market"}},
+      "sample_reason": "监管驱动的复杂采购市场题"
+    },
+    {
+      "item_id": "fv1_mkt_02",
+      "task_type": "market_analysis",
+      "split_name": "calibration",
+      "query_snapshot": "截至 2025 年 1 月，分析企业 AI 编程助手市场的竞争结构。重点比较产品形态、企业治理、代码与遥测数据处理、IDE/代码托管集成和采用障碍；市场份额不足时不得用下载量替代。",
+      "required_points": [
+        {"criterion_id": "landscape", "text": "给出有边界的竞争版图", "weight": 2, "critical": true, "acceptance": "按产品形态或目标客户分类，避免随意罗列"},
+        {"criterion_id": "enterprise_factors", "text": "比较治理、数据和集成", "weight": 3, "critical": true, "acceptance": "区分公开承诺、配置能力和需要企业自行控制的风险"},
+        {"criterion_id": "adoption", "text": "分析采用证据和障碍", "weight": 2, "critical": true, "acceptance": "讨论席位使用、代码接受、开发流程、安全审查和 ROI 证据局限"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "下载量、试用用户、付费席位和活跃使用不是可直接互换的市场份额指标", "importance": "critical"},
+        {"fact_id": "f2", "text": "企业采购不仅取决于补全质量，还取决于身份、策略、审计、数据处理和代码托管集成", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把插件下载量直接表述为企业市场份额", "把厂商基准测试当作跨产品公平对比"],
+      "source_policy": {"preferred_types": ["official", "filing", "reputable_research"], "minimum_authoritative_sources": 5, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "market_analysis", "should_clarify": false}, "strata": {"difficulty": "medium", "domain": "developer_tools"}},
+      "sample_reason": "缺乏统一份额口径的竞争分析题"
+    },
+    {
+      "item_id": "fv1_mkt_03",
+      "task_type": "market_analysis",
+      "query_snapshot": "分析 2024 年全球电池储能系统价值链，覆盖上游电芯、PCS、系统集成、软件、EPC 和长期运维。比较中国、美国、欧洲的需求驱动、贸易政策和利润池，并给出未来三年的情景风险。",
+      "required_points": [
+        {"criterion_id": "value_chain", "text": "拆解价值链及主要利润来源", "weight": 3, "critical": true, "acceptance": "不能把电芯产能等同整个储能系统市场，需覆盖集成和全生命周期服务"},
+        {"criterion_id": "regional", "text": "比较三地区政策、需求和竞争结构", "weight": 3, "critical": true, "acceptance": "区分补贴、本地化、并网、电力市场和贸易措施"},
+        {"criterion_id": "scenarios", "text": "给出三年情景和风险指标", "weight": 2, "critical": true, "acceptance": "至少包含价格、利率、并网、供应过剩、安全事故或政策变化"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "电池储能系统成本和价值不仅来自电芯，还包括 PCS、集成、EPC、软件与运维", "importance": "critical"},
+        {"fact_id": "f2", "text": "装机容量、出货量、收入和可用时长口径不能混用", "importance": "critical"}
+      ],
+      "forbidden_claims": ["用电芯出货量直接代表储能项目收入", "给出单一确定增长率而不说明来源和口径"],
+      "source_policy": {"preferred_types": ["official", "filing", "reputable_research"], "minimum_authoritative_sources": 6, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "market_analysis", "should_clarify": false}, "strata": {"difficulty": "hard", "domain": "energy_storage"}},
+      "sample_reason": "多区域价值链与情景分析题"
+    },
+    {
+      "item_id": "fv1_mkt_04",
+      "task_type": "market_analysis",
+      "query_snapshot": "截至 2024 年底，分析肥胖适应症 GLP-1/相关肠促胰素药物的竞争格局。区分已批准产品、已提交监管申请和临床在研项目，讨论产能、给药方式、疗效安全证据和支付可及性。",
+      "required_points": [
+        {"criterion_id": "status", "text": "按监管和研发状态区分产品", "weight": 3, "critical": true, "acceptance": "明确已批准、申请中和不同临床阶段，不能把在研结果写成商业化事实"},
+        {"criterion_id": "evidence", "text": "比较疗效和安全证据的可比性", "weight": 3, "critical": true, "acceptance": "说明试验人群、终点、周期和跨试验比较限制"},
+        {"criterion_id": "commercial", "text": "分析产能、给药和支付因素", "weight": 2, "critical": false, "acceptance": "覆盖供应能力、注射/口服、价格/报销或患者持续使用"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "不同试验的减重比例不能在忽略人群、治疗周期和估计方法时直接排名", "importance": "critical"},
+        {"fact_id": "f2", "text": "监管批准适应症需要与糖尿病适应症及在研肥胖适应症分开", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把早期临床或新闻稿数据写成已获批疗效", "进行个体治疗建议"],
+      "source_policy": {"preferred_types": ["official", "academic", "filing"], "minimum_authoritative_sources": 6, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "market_analysis", "should_clarify": false}, "constraints": {"medical_information_only": true}, "strata": {"difficulty": "medium", "domain": "biopharma"}},
+      "sample_reason": "监管状态与临床证据敏感市场题"
+    },
+    {
+      "item_id": "fv1_mkt_05",
+      "task_type": "market_analysis",
+      "query_snapshot": "分析商业卫星对地观测市场中光学、SAR 和高光谱数据服务的竞争方式。重点讨论重访频率、分辨率、天气依赖、任务调度、数据授权和面向保险、农业、国防客户的商业模式。",
+      "required_points": [
+        {"criterion_id": "modalities", "text": "比较三类传感方式的能力边界", "weight": 3, "critical": true, "acceptance": "准确讨论天气/昼夜、分辨率、光谱信息和成本取舍"},
+        {"criterion_id": "business_models", "text": "分析数据与分析服务商业模式", "weight": 2, "critical": true, "acceptance": "区分影像销售、订阅、任务调度、API 和分析结果服务"},
+        {"criterion_id": "segments", "text": "比较三个客户行业的采购逻辑", "weight": 2, "critical": false, "acceptance": "说明时效、精度、授权、安全和采购周期差异"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "SAR 可在夜间及穿透云层成像，但其数据解释和成本特征不同于光学影像", "importance": "critical"},
+        {"fact_id": "f2", "text": "卫星星座标称重访频率不等同于特定地点可交付的可用影像频率", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把标称重访时间等同任何地点的保证交付时间", "把不同传感器的分辨率数字直接作为质量排名"],
+      "source_policy": {"preferred_types": ["official", "filing", "academic", "reputable_research"], "minimum_authoritative_sources": 5, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "market_analysis", "should_clarify": false}, "strata": {"difficulty": "medium", "domain": "space_economy"}},
+      "sample_reason": "技术能力驱动的垂直市场题"
+    },
+    {
+      "item_id": "fv1_mkt_06",
+      "task_type": "market_analysis",
+      "query_snapshot": "分析企业数据库工作负载向云迁移的市场驱动和阻力。不要估算一个缺乏依据的总市场规模；请按托管关系数据库、云原生分析数据库和数据库现代化服务拆分，并提出可观测的领先指标。",
+      "required_points": [
+        {"criterion_id": "segments", "text": "拆分三个相互重叠但不同的市场部分", "weight": 3, "critical": true, "acceptance": "说明产品收入、云消费和专业服务口径可能重叠"},
+        {"criterion_id": "drivers_barriers", "text": "分析迁移动因与阻力", "weight": 2, "critical": true, "acceptance": "覆盖弹性、托管效率、数据重力、许可、技能、主权和退出成本"},
+        {"criterion_id": "indicators", "text": "提出可跟踪领先指标", "weight": 2, "critical": false, "acceptance": "指标应可验证且避免把单一厂商收入等同整个市场"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "云数据库收入、基础设施消费和迁移服务收入存在重叠，不能无调整加总", "importance": "critical"},
+        {"fact_id": "f2", "text": "数据库迁移经常受到兼容性、数据重力、停机窗口和人员技能约束", "importance": "critical"}
+      ],
+      "forbidden_claims": ["拼接不同定义的市场报告得出精确总规模", "把云厂商整体增长率当作数据库迁移率"],
+      "evaluation_contract": {"expected_intent": {"research_type": "market_analysis", "should_clarify": false}, "strata": {"difficulty": "medium", "domain": "enterprise_software"}},
+      "sample_reason": "避免伪精确规模的市场结构题"
+    },
+    {
+      "item_id": "fv1_mkt_07",
+      "task_type": "market_analysis",
+      "query_snapshot": "基于 IFR 等行业资料，分析工业机器人市场时应如何区分年度安装量、在役存量、机器人密度和厂商收入。比较汽车、电子和一般工业的需求驱动，并讨论中国、欧洲、北美的结构差异。",
+      "required_points": [
+        {"criterion_id": "metrics", "text": "解释四类市场指标", "weight": 3, "critical": true, "acceptance": "说明各指标分母、时间和用途，不能相互替代"},
+        {"criterion_id": "industries", "text": "比较三个终端行业", "weight": 2, "critical": true, "acceptance": "覆盖资本周期、自动化任务、劳动力和供应链因素"},
+        {"criterion_id": "regions", "text": "比较三地区结构", "weight": 2, "critical": false, "acceptance": "区分制造业结构、存量基础、政策和本土供应商，不只按总量排名"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "机器人密度通常以制造业雇员等分母标准化，与年度安装量不同", "importance": "critical"},
+        {"fact_id": "f2", "text": "年度安装量是流量，在役存量是存量，两者不能直接比较增长含义", "importance": "critical"}
+      ],
+      "forbidden_claims": ["混用安装量和在役存量", "用机器人密度直接推导厂商收入"],
+      "evaluation_contract": {"expected_intent": {"research_type": "market_analysis", "should_clarify": false}, "strata": {"difficulty": "easy", "domain": "industrial_automation"}},
+      "sample_reason": "市场统计指标辨析题"
+    },
+    {
+      "item_id": "fv1_ar_01",
+      "task_type": "academic_review",
+      "split_name": "calibration",
+      "query_snapshot": "综述 2020—2024 年检索增强生成减少事实性错误的研究证据。比较检索质量、生成器利用证据、引用归因和端到端评测，指出 RAG 仍然失败的主要机制及研究空白。",
+      "required_points": [
+        {"criterion_id": "taxonomy", "text": "建立 RAG 事实性错误机制分类", "weight": 3, "critical": true, "acceptance": "至少区分检索失败、证据冲突/噪声、生成器忽略证据和引用不支持"},
+        {"criterion_id": "evidence", "text": "综合多篇研究而非论文摘要列表", "weight": 3, "critical": true, "acceptance": "比较数据集、任务、基线和评测定义，指出结论一致与冲突之处"},
+        {"criterion_id": "gaps", "text": "总结局限和研究空白", "weight": 2, "critical": false, "acceptance": "讨论动态知识、长文档、多跳、真实用户任务或自动 Judge 可靠性"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "检索到相关证据不保证生成器会忠实使用证据", "importance": "critical"},
+        {"fact_id": "f2", "text": "RAG 评价需要区分检索指标、答案正确性和引用归因正确性", "importance": "critical"}
+      ],
+      "forbidden_claims": ["声称 RAG 从机制上消除了幻觉", "只根据论文标题推断实验结论"],
+      "source_policy": {"preferred_types": ["academic"], "minimum_authoritative_sources": 8, "require_cross_source_comparison": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "strata": {"difficulty": "hard", "domain": "rag_research"}},
+      "sample_reason": "多层机制与证据综合综述题"
+    },
+    {
+      "item_id": "fv1_ar_02",
+      "task_type": "academic_review",
+      "split_name": "calibration",
+      "query_snapshot": "综述 2022—2024 年 LLM Agent 在规划、工具使用和自我反思方面的研究。重点评价实验是否真正测量了规划能力，以及更长轨迹和 Reviewer/Reflection 是否稳定改善任务成功率。",
+      "required_points": [
+        {"criterion_id": "capabilities", "text": "区分规划、工具使用和反思机制", "weight": 2, "critical": true, "acceptance": "说明各机制的输入输出和可能混杂，不能把所有 agent loop 统称规划"},
+        {"criterion_id": "evaluation", "text": "批判性比较评测设计", "weight": 3, "critical": true, "acceptance": "讨论任务泄漏、工具环境、模型能力、轨迹预算、成功判定和复现性"},
+        {"criterion_id": "reflection_effect", "text": "评价 Reflection/Reviewer 的增益证据", "weight": 3, "critical": true, "acceptance": "区分同题前后提升与对照/消融证据，并报告失败或成本"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "增加推理轮次或反思步骤同时改变了计算预算，不能自动归因于反思机制", "importance": "critical"},
+        {"fact_id": "f2", "text": "Agent 成功率对模型、提示、工具错误和评测环境高度敏感", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把无对照的第二次回答改善直接证明为 Reviewer 因果增益", "忽略额外 Token 和工具调用成本"],
+      "source_policy": {"preferred_types": ["academic"], "minimum_authoritative_sources": 8},
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "strata": {"difficulty": "hard", "domain": "agent_research"}},
+      "sample_reason": "直接对应 Reviewer 机制有效性的综述题"
+    },
+    {
+      "item_id": "fv1_ar_03",
+      "task_type": "academic_review",
+      "query_snapshot": "综述用于表格数据发布的合成数据方法，比较生成质量、下游效用、成员推断/属性推断风险和差分隐私保证。面向医疗数据团队，明确经验隐私测试与形式化保证的区别。",
+      "required_points": [
+        {"criterion_id": "methods", "text": "比较主要合成表格数据方法", "weight": 2, "critical": false, "acceptance": "按统计、深度生成、扩散或隐私机制建立有意义分类"},
+        {"criterion_id": "utility_privacy", "text": "综合效用与隐私评价", "weight": 3, "critical": true, "acceptance": "同时覆盖分布相似、下游任务、稀有群体和攻击评测"},
+        {"criterion_id": "dp_boundary", "text": "区分差分隐私与经验攻击结果", "weight": 3, "critical": true, "acceptance": "不能把未观察到攻击成功等同数学隐私保证"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "高统计相似性可能提高效用，也可能增加记忆和隐私泄露风险", "importance": "critical"},
+        {"fact_id": "f2", "text": "差分隐私是针对相邻数据集输出分布的形式化保证，经验攻击测试不能替代该保证", "importance": "critical"}
+      ],
+      "forbidden_claims": ["宣称合成数据天然匿名", "把一次成员推断失败写成绝对隐私证明"],
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "constraints": {"medical_information_only": true}, "strata": {"difficulty": "medium", "domain": "privacy_ml"}},
+      "sample_reason": "形式化保证与经验指标边界题"
+    },
+    {
+      "item_id": "fv1_ar_04",
+      "task_type": "academic_review",
+      "query_snapshot": "综述长上下文模型与 RAG 在企业问答中的比较研究。分析“上下文窗口能容纳全部文档”为什么不等于无需检索，并比较准确性、位置偏差、延迟、成本、更新和引用可追溯性。",
+      "required_points": [
+        {"criterion_id": "evidence_review", "text": "综合长上下文与 RAG 的比较证据", "weight": 3, "critical": true, "acceptance": "说明任务、模型和预算条件，避免把单一基准推广到所有企业问答"},
+        {"criterion_id": "mechanisms", "text": "解释上下文长度、检索和证据利用机制", "weight": 3, "critical": true, "acceptance": "覆盖位置偏差、注意力利用、检索召回、噪声和更新频率"},
+        {"criterion_id": "decision", "text": "给出条件化架构选择", "weight": 2, "critical": false, "acceptance": "至少包含长上下文、RAG 和混合方案的适用边界"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "能够输入更长文本不保证模型等量利用不同位置的信息", "importance": "critical"},
+        {"fact_id": "f2", "text": "长上下文和检索可以组合，不是必须二选一的互斥方案", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把最大上下文窗口直接等同有效可用上下文", "不说明预算便宣称某方案成本更低"],
+      "source_policy": {"preferred_types": ["academic", "official"], "minimum_authoritative_sources": 8, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "strata": {"difficulty": "hard", "domain": "llm_architecture"}},
+      "sample_reason": "相互替代与组合机制综合题"
+    },
+    {
+      "item_id": "fv1_ar_05",
+      "task_type": "academic_review",
+      "query_snapshot": "综述联邦学习在非独立同分布数据下的主要问题和方法。比较客户端漂移、个性化、公平性、通信效率和隐私安全，避免只按平均准确率评价。",
+      "required_points": [
+        {"criterion_id": "non_iid", "text": "解释不同非 IID 类型和客户端漂移", "weight": 3, "critical": true, "acceptance": "区分标签、特征、数量或概念差异及其对优化的影响"},
+        {"criterion_id": "methods", "text": "比较全局优化与个性化方法", "weight": 2, "critical": true, "acceptance": "说明适用假设、收敛或部署代价，而非算法名单"},
+        {"criterion_id": "metrics", "text": "评价平均值之外的指标", "weight": 2, "critical": true, "acceptance": "覆盖尾部客户端、公平性、通信、鲁棒性和隐私威胁"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "非 IID 并非单一条件，不同异质性类型会产生不同优化与公平问题", "importance": "critical"},
+        {"fact_id": "f2", "text": "联邦学习保留原始数据在本地不意味着自动获得差分隐私或抵抗所有攻击", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把数据不出端等同绝对隐私", "只报告全局平均准确率便判断所有客户端受益"],
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "strata": {"difficulty": "easy", "domain": "federated_learning"}},
+      "sample_reason": "多目标学术综述题"
+    },
+    {
+      "item_id": "fv1_ar_06",
+      "task_type": "academic_review",
+      "query_snapshot": "综述 AI 代码生成工具对软件安全的影响，分别评价生成代码中的漏洞、开发者过度信任、恶意建议、依赖供应链和安全修复能力。要求区分实验室基准、用户研究和真实仓库证据。",
+      "required_points": [
+        {"criterion_id": "threats", "text": "建立安全影响分类", "weight": 2, "critical": true, "acceptance": "覆盖生成漏洞、人机交互、依赖、提示/上下文攻击和潜在修复收益"},
+        {"criterion_id": "study_types", "text": "区分不同证据类型", "weight": 3, "critical": true, "acceptance": "说明基准、受控用户研究和现场数据能回答的不同问题"},
+        {"criterion_id": "controls", "text": "提出与证据相称的控制措施", "weight": 2, "critical": false, "acceptance": "包括审查、测试、SAST/依赖扫描、策略和培训，避免宣称单一工具解决"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "生成代码是否安全取决于任务、语言、提示、模型、采样与开发者审查", "importance": "critical"},
+        {"fact_id": "f2", "text": "受控漏洞基准结果不能直接等同真实组织的事故率", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把单一小样本研究的比例推广为所有生成代码漏洞率", "宣称禁止或启用工具必然提高整体安全"],
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "strata": {"difficulty": "medium", "domain": "software_security"}},
+      "sample_reason": "多证据层级安全综述题"
+    },
+    {
+      "item_id": "fv1_ar_07",
+      "task_type": "academic_review",
+      "query_snapshot": "综述语言模型 scaling laws 从训练计算扩展到推理时计算的研究脉络。比较参数、数据、训练 FLOPs、采样数量和搜索/验证预算，说明不同论文中的“计算最优”为什么不能直接横向比较。",
+      "required_points": [
+        {"criterion_id": "dimensions", "text": "区分训练和推理计算维度", "weight": 3, "critical": true, "acceptance": "说明参数、Token、训练 FLOPs、生成样本和验证/搜索预算的关系"},
+        {"criterion_id": "evidence", "text": "比较主要实证结论和边界", "weight": 3, "critical": true, "acceptance": "交代模型族、任务、指标和计算核算假设"},
+        {"criterion_id": "comparability", "text": "解释跨论文不可直接比较之处", "weight": 2, "critical": false, "acceptance": "至少讨论 FLOPs 估算、数据质量、训练复用、推理延迟或验证器成本"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "计算最优结论依赖固定预算定义、模型族、数据和目标损失", "importance": "critical"},
+        {"fact_id": "f2", "text": "增加推理样本或搜索深度会增加成本，但收益依赖任务和验证信号", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把参数量当作唯一计算量指标", "忽略验证器和多样本生成成本"],
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "strata": {"difficulty": "medium", "domain": "scaling_laws"}},
+      "sample_reason": "定义口径敏感的理论实证综述题"
+    },
+    {
+      "item_id": "fv1_tf_01",
+      "task_type": "trend_forecast",
+      "split_name": "calibration",
+      "query_snapshot": "预测 2025—2030 年数据中心电力需求及其对电网的影响。不要给单点预测；构建低、中、高三种情景，解释 AI 负载、能效、利用率、并网、地区迁移和自备电源的关键变量。",
+      "required_points": [
+        {"criterion_id": "baseline", "text": "建立可追溯的历史基线", "weight": 2, "critical": true, "acceptance": "说明数据中心定义、年份、地区和电力/能源单位"},
+        {"criterion_id": "scenarios", "text": "构建三种可解释情景", "weight": 3, "critical": true, "acceptance": "各情景明确驱动变量，不只是给三个数"},
+        {"criterion_id": "grid_effects", "text": "分析电网和地区差异", "weight": 3, "critical": true, "acceptance": "覆盖峰值、并网周期、输配电、可调度性、用水或排放中的相关影响"},
+        {"criterion_id": "uncertainty", "text": "校准不确定性和监测指标", "weight": 2, "critical": true, "acceptance": "指出主要未知量并给出可更新预测的领先指标"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "服务器额定功率、数据中心 IT 负载、设施总用电和年能源消耗是不同口径", "importance": "critical"},
+        {"fact_id": "f2", "text": "AI 计算需求增长不必然按相同比例转化为用电增长，能效、利用率和工作负载迁移会改变结果", "importance": "critical"}
+      ],
+      "forbidden_claims": ["给出无假设的单一确定预测", "把已宣布容量全部视为按期建成并满负荷运行"],
+      "source_policy": {"preferred_types": ["official", "filing", "academic", "reputable_research"], "minimum_authoritative_sources": 6, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "trend_forecast", "should_clarify": false}, "mechanism_tags": {"uncertainty_calibration_required": true}, "strata": {"difficulty": "hard", "domain": "energy_ai"}},
+      "sample_reason": "高不确定多变量情景预测题"
+    },
+    {
+      "item_id": "fv1_tf_02",
+      "task_type": "trend_forecast",
+      "query_snapshot": "预测 2025—2027 年欧盟 AI Act 将如何改变企业 AI 治理软件与咨询服务需求。区分法规确定时间表、企业提前准备行为和供应商营销，不要把合规支出预测写成已发生收入。",
+      "required_points": [
+        {"criterion_id": "regulatory_baseline", "text": "准确建立法规时间和义务基线", "weight": 3, "critical": true, "acceptance": "按系统角色/风险层级区分适用时间与义务"},
+        {"criterion_id": "demand_channels", "text": "分析需求传导机制", "weight": 2, "critical": true, "acceptance": "覆盖盘点、风险分类、文档、监控、供应链和培训等需求"},
+        {"criterion_id": "forecast", "text": "给出分情景市场判断", "weight": 2, "critical": false, "acceptance": "区分监管执行、标准成熟、预算和自建/采购选择"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "法定义务适用时间与企业采购和准备支出的发生时间可能不同", "importance": "critical"},
+        {"fact_id": "f2", "text": "AI 治理需求既可能由软件满足，也可能由流程、法律咨询、审计和内部团队满足", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把所有 AI 应用视为高风险系统", "把供应商宣传的市场规模写成监管机构预测"],
+      "evaluation_contract": {"expected_intent": {"research_type": "trend_forecast", "should_clarify": false}, "mechanism_tags": {"uncertainty_calibration_required": true}, "strata": {"difficulty": "easy", "domain": "regtech"}},
+      "sample_reason": "法规事件驱动需求预测题"
+    },
+    {
+      "item_id": "fv1_tf_03",
+      "task_type": "trend_forecast",
+      "query_snapshot": "评估 2025—2030 年电动车动力电池技术路线变化：LFP/LMFP、高镍三元、钠离子和固态。按乘用车细分市场讨论能量密度、成本、安全、快充、低温、供应链和量产成熟度，给出情景而非押注唯一赢家。",
+      "required_points": [
+        {"criterion_id": "technology", "text": "比较四类路线的性能与成熟度", "weight": 3, "critical": true, "acceptance": "区分电芯、Pack 和量产口径，并标明实验室、示范或规模量产阶段"},
+        {"criterion_id": "segments", "text": "按车辆细分匹配技术", "weight": 2, "critical": true, "acceptance": "至少区分入门、主流、高端/高性能和特殊气候场景"},
+        {"criterion_id": "scenarios", "text": "给出份额变化情景与触发条件", "weight": 3, "critical": true, "acceptance": "覆盖材料价格、政策、产能、良率、快充基础设施和安全事件"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "实验室能量密度、单体电芯指标和量产 Pack 指标不能直接比较", "importance": "critical"},
+        {"fact_id": "f2", "text": "电池路线选择是成本、性能、安全、供应链和量产良率的多目标权衡", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把企业目标量产时间当作已实现规模量产", "给出所有乘用车统一技术赢家"],
+      "source_policy": {"preferred_types": ["official", "academic", "filing", "reputable_research"], "minimum_authoritative_sources": 7, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "trend_forecast", "should_clarify": false}, "mechanism_tags": {"uncertainty_calibration_required": true}, "strata": {"difficulty": "hard", "domain": "battery"}},
+      "sample_reason": "多路线成熟度与场景预测题"
+    },
+    {
+      "item_id": "fv1_tf_04",
+      "task_type": "trend_forecast",
+      "query_snapshot": "分析 2025—2028 年端侧小语言模型在手机、PC 和工业边缘设备上的发展。讨论模型压缩、NPU、内存/功耗、隐私、离线能力、云端协同和开发生态，并提出可以验证趋势是否成立的指标。",
+      "required_points": [
+        {"criterion_id": "drivers", "text": "分析硬件与模型共同驱动", "weight": 3, "critical": true, "acceptance": "覆盖量化/蒸馏、内存带宽、NPU、能耗和端云分工"},
+        {"criterion_id": "segments", "text": "区分手机、PC 和工业边缘", "weight": 2, "critical": true, "acceptance": "说明交互延迟、隐私、可靠性、更新和成本要求不同"},
+        {"criterion_id": "indicators", "text": "提出可验证领先指标", "weight": 2, "critical": false, "acceptance": "包括真实端侧活跃功能、模型大小、延迟能耗、开发者采用或端云调用比例"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "模型能够在设备上运行不等于完整应用可以完全离线或不使用云服务", "importance": "critical"},
+        {"fact_id": "f2", "text": "端侧部署受内存、带宽、持续功耗和散热约束，不只受峰值算力约束", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把芯片 TOPS 直接等同实际模型 Token/s 或用户体验", "把产品发布计划写成已实现活跃使用"],
+      "evaluation_contract": {"expected_intent": {"research_type": "trend_forecast", "should_clarify": false}, "mechanism_tags": {"uncertainty_calibration_required": true}, "strata": {"difficulty": "medium", "domain": "edge_ai"}},
+      "sample_reason": "端云协同与硬件约束趋势题"
+    },
+    {
+      "item_id": "fv1_tf_05",
+      "task_type": "trend_forecast",
+      "query_snapshot": "评估容错量子计算在 2030 年前进入商业实用阶段的可能性。区分物理量子比特、逻辑量子比特、纠错阈值、逻辑错误率和算法资源估算，构建里程碑式情景，不做投资建议。",
+      "required_points": [
+        {"criterion_id": "metrics", "text": "准确区分关键量子计算指标", "weight": 3, "critical": true, "acceptance": "不能用物理比特数量直接代表可运行的容错算法规模"},
+        {"criterion_id": "milestones", "text": "建立从实验到商业实用的里程碑", "weight": 3, "critical": true, "acceptance": "覆盖可重复纠错、逻辑错误率下降、逻辑门、系统扩展和有价值应用验证"},
+        {"criterion_id": "scenarios", "text": "给出 2030 前情景和不确定性", "weight": 2, "critical": true, "acceptance": "区分科学演示、窄任务优势和广泛商业价值"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "一个逻辑量子比特通常需要多个物理量子比特，开销取决于纠错码和目标错误率", "importance": "critical"},
+        {"fact_id": "f2", "text": "物理比特数量增长本身不能证明容错计算或商业优势", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把厂商路线图当作确定交付", "把量子优越性实验等同通用商业价值"],
+      "source_policy": {"preferred_types": ["academic", "official", "reputable_research"], "minimum_authoritative_sources": 7, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "trend_forecast", "should_clarify": false}, "constraints": {"no_investment_advice": true}, "mechanism_tags": {"uncertainty_calibration_required": true}, "strata": {"difficulty": "medium", "domain": "quantum"}},
+      "sample_reason": "路线图噪声与技术里程碑预测题"
+    },
+    {
+      "item_id": "fv1_tf_06",
+      "task_type": "trend_forecast",
+      "query_snapshot": "分析 2025—2028 年软件供应链安全监管和采购要求的发展趋势。覆盖 SBOM、安全开发框架、漏洞披露、开源组件责任和产品安全认证，比较美国与欧盟的政策传导方式。",
+      "required_points": [
+        {"criterion_id": "baseline", "text": "建立美国和欧盟政策基线", "weight": 3, "critical": true, "acceptance": "区分法律、行政采购要求、指南和自愿标准的效力"},
+        {"criterion_id": "transmission", "text": "分析要求如何传导到供应商", "weight": 2, "critical": true, "acceptance": "覆盖合同、认证、漏洞处理、文档和开源依赖治理"},
+        {"criterion_id": "forecast", "text": "给出未来三年情景和指标", "weight": 2, "critical": false, "acceptance": "指出实施细则、标准、执法、采购模板和工具采用等可观察信号"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "SBOM 提高组件透明度，但本身不证明组件无漏洞或产品安全", "importance": "critical"},
+        {"fact_id": "f2", "text": "法律义务、政府采购条款和自愿安全框架具有不同的适用范围与执行机制", "importance": "critical"}
+      ],
+      "forbidden_claims": ["把生成 SBOM 等同完成全部软件供应链合规", "混淆已生效义务与仍在制定的实施标准"],
+      "evaluation_contract": {"expected_intent": {"research_type": "trend_forecast", "should_clarify": false}, "mechanism_tags": {"uncertainty_calibration_required": true}, "strata": {"difficulty": "medium", "domain": "cyber_regulation"}},
+      "sample_reason": "跨法域政策传导趋势题"
+    },
+    {
+      "item_id": "fv1_ec_01",
+      "task_type": "evidence_conflict",
+      "split_name": "calibration",
+      "query_snapshot": "为什么不同研究对纯电动车全生命周期温室气体排放的结论差异很大？比较至少三类权威研究，统一功能单位后分析电网结构、电池生产、车辆寿命、车型和回收假设，并给出适用条件而非单一结论。",
+      "required_points": [
+        {"criterion_id": "normalization", "text": "统一功能单位和系统边界", "weight": 3, "critical": true, "acceptance": "至少统一到每车公里或完整寿命，并交代制造、使用、回收边界"},
+        {"criterion_id": "drivers", "text": "解释结论差异的关键参数", "weight": 3, "critical": true, "acceptance": "覆盖电网、电池、寿命里程、效率、车型和回收中的主要差异"},
+        {"criterion_id": "conditional", "text": "给出条件化结论和敏感性", "weight": 2, "critical": true, "acceptance": "说明在何种电网和使用条件下结果改变，不挑选单一来源"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "生命周期结论高度依赖功能单位、系统边界、电力排放因子和车辆寿命里程", "importance": "critical"},
+        {"fact_id": "f2", "text": "制造阶段排放较高不自动意味着全生命周期排放较高，必须结合使用阶段", "importance": "critical"}
+      ],
+      "forbidden_claims": ["混用每车、每公里和每年排放", "只选择支持预设立场的一项研究"],
+      "source_policy": {"preferred_types": ["academic", "official"], "minimum_authoritative_sources": 6, "require_cross_source_comparison": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "mechanism_tags": {"evidence_conflict_expected": true}, "strata": {"difficulty": "hard", "domain": "climate_transport"}},
+      "sample_reason": "参数与系统边界导致的证据冲突题"
+    },
+    {
+      "item_id": "fv1_ec_02",
+      "task_type": "evidence_conflict",
+      "query_snapshot": "远程办公究竟提高还是降低知识工作者生产率？综合企业现场研究、员工调查和受控任务实验，解释指标、岗位、协作模式和选择偏差造成的冲突，并给管理者一个可验证的本地试验方案。",
+      "required_points": [
+        {"criterion_id": "evidence_types", "text": "区分现场、调查和实验室证据", "weight": 3, "critical": true, "acceptance": "说明自报生产率、可观测产出、质量和组织绩效不是同一指标"},
+        {"criterion_id": "heterogeneity", "text": "解释岗位和制度异质性", "weight": 2, "critical": true, "acceptance": "覆盖个人专注、协作创新、资历、通勤和混合制度"},
+        {"criterion_id": "local_test", "text": "设计企业本地验证", "weight": 2, "critical": false, "acceptance": "包含基线、对照/分阶段、质量与员工结果、观察周期和混杂控制"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "员工自报生产率与可测量产出可能方向不同", "importance": "critical"},
+        {"fact_id": "f2", "text": "远程办公效果因岗位、团队协作、管理制度和员工选择而异", "importance": "critical"}
+      ],
+      "forbidden_claims": ["用单一公司或单一岗位结果代表所有知识工作", "把相关性直接表述为远程制度的因果效果"],
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "mechanism_tags": {"evidence_conflict_expected": true}, "strata": {"difficulty": "medium", "domain": "future_of_work"}},
+      "sample_reason": "指标和选择偏差冲突题"
+    },
+    {
+      "item_id": "fv1_ec_03",
+      "task_type": "evidence_conflict",
+      "query_snapshot": "某新语言模型在公开基准上大幅领先，能否据此认定真实能力提升？研究基准污染、训练数据泄漏、提示与评分差异、模型选择和独立复现，设计一套核验该声明的证据流程。",
+      "required_points": [
+        {"criterion_id": "threats", "text": "建立基准声明威胁模型", "weight": 3, "critical": true, "acceptance": "覆盖污染、提示、采样、评分器、挑选任务和报告偏差"},
+        {"criterion_id": "evidence", "text": "区分厂商、第三方和现场证据", "weight": 2, "critical": true, "acceptance": "评估可复现配置、原始输出、统计不确定性和未公开测试集"},
+        {"criterion_id": "protocol", "text": "设计可执行核验流程", "weight": 3, "critical": true, "acceptance": "包含冻结配置、多次运行、污染缓解、盲测、业务任务和误差分析"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "公开基准可能进入训练或调优数据，导致分数不能完全代表泛化能力", "importance": "critical"},
+        {"fact_id": "f2", "text": "提示、采样参数、评分器和运行次数可显著影响模型基准结果", "importance": "critical"}
+      ],
+      "forbidden_claims": ["仅凭一个公开排行榜分数宣称全面能力领先", "把未披露测试配置的厂商结果视为已独立复现"],
+      "source_policy": {"preferred_types": ["academic", "official", "reputable_research"], "minimum_authoritative_sources": 6, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "mechanism_tags": {"evidence_conflict_expected": true}, "strata": {"difficulty": "medium", "domain": "llm_evaluation"}},
+      "sample_reason": "直接测试证据链和核验机制"
+    },
+    {
+      "item_id": "fv1_ec_04",
+      "task_type": "evidence_conflict",
+      "query_snapshot": "间歇性禁食是否比持续热量限制更有利于减重和代谢健康？综合随机试验和系统综述，区分等热量比较、依从性、随访长度和不同人群，只提供一般医学信息。",
+      "required_points": [
+        {"criterion_id": "comparison", "text": "区分等热量疗效与现实依从性", "weight": 3, "critical": true, "acceptance": "说明饮食时间模式本身与总能量差异的混杂"},
+        {"criterion_id": "outcomes", "text": "综合体重和代谢结局", "weight": 2, "critical": true, "acceptance": "区分短期与长期、统计显著与临床意义，并报告不良事件/退出"},
+        {"criterion_id": "populations", "text": "说明适用人群与安全边界", "weight": 2, "critical": true, "acceptance": "不为个体下结论，并指出特殊人群需专业指导"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "若两组总能量摄入不同，不能把全部减重差异归因于进食时间窗口", "importance": "critical"},
+        {"fact_id": "f2", "text": "短期体重变化、长期维持和代谢指标是不同结局", "importance": "critical"}
+      ],
+      "forbidden_claims": ["提供针对个人疾病或用药的饮食处方", "把观察性关联写成随机试验证明"],
+      "source_policy": {"preferred_types": ["academic", "official"], "minimum_authoritative_sources": 6},
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "constraints": {"medical_information_only": true}, "mechanism_tags": {"evidence_conflict_expected": true}, "strata": {"difficulty": "medium", "domain": "nutrition"}},
+      "sample_reason": "临床试验口径冲突与安全边界题"
+    },
+    {
+      "item_id": "fv1_ec_05",
+      "task_type": "evidence_conflict",
+      "query_snapshot": "为什么不同机构对新建核电、风电、光伏和燃气电站的平准化度电成本结论不同？统一币值年份、折现率、容量因子、寿命和系统边界，并解释 LCOE 为什么不足以单独决定电力系统投资。",
+      "required_points": [
+        {"criterion_id": "normalization", "text": "统一关键 LCOE 假设", "weight": 3, "critical": true, "acceptance": "至少处理币值、折现率、容量因子、寿命、燃料/碳价和建设期"},
+        {"criterion_id": "source_conflict", "text": "解释来源差异而不是挑选数字", "weight": 3, "critical": true, "acceptance": "比较技术成熟度、地区融资、政策、项目范围和方法差异"},
+        {"criterion_id": "system_value", "text": "说明 LCOE 的决策边界", "weight": 3, "critical": true, "acceptance": "讨论可调度性、容量价值、并网、储能、输电和系统整合成本"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "LCOE 对折现率、容量因子、建设期和寿命假设敏感", "importance": "critical"},
+        {"fact_id": "f2", "text": "LCOE 衡量单位发电成本，不完整衡量发电在特定时间和地点对系统的价值", "importance": "critical"}
+      ],
+      "forbidden_claims": ["比较不同币值年份和折现率的数字后直接排名", "仅凭 LCOE 宣称一种技术可替代所有其他电源"],
+      "source_policy": {"preferred_types": ["official", "academic", "reputable_research"], "minimum_authoritative_sources": 7, "require_cross_source_comparison": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "mechanism_tags": {"evidence_conflict_expected": true}, "strata": {"difficulty": "hard", "domain": "energy_economics"}},
+      "sample_reason": "假设归一化和系统价值冲突题"
+    },
+    {
+      "item_id": "fv1_ec_06",
+      "task_type": "evidence_conflict",
+      "query_snapshot": "AI 编程助手究竟提升还是降低软件开发生产率？综合厂商实验、独立研究和企业现场数据，区分任务完成时间、代码质量、维护成本、开发者经验和组织交付指标，并提出企业内部验证设计。",
+      "required_points": [
+        {"criterion_id": "metrics", "text": "区分个人任务和组织结果指标", "weight": 3, "critical": true, "acceptance": "覆盖完成时间、正确性/安全、返工、评审、部署和长期维护"},
+        {"criterion_id": "conflicts", "text": "解释研究结论冲突", "weight": 3, "critical": true, "acceptance": "分析任务类型、样本、经验、工具版本、自选使用和赞助偏差"},
+        {"criterion_id": "experiment", "text": "提出企业内部因果验证", "weight": 3, "critical": true, "acceptance": "包含随机或分阶段设计、基线、使用依从、质量护栏、周期和分组分析"}
+      ],
+      "reference_facts": [
+        {"fact_id": "f1", "text": "编码任务完成更快不自动代表整体软件交付或长期维护成本下降", "importance": "critical"},
+        {"fact_id": "f2", "text": "工具效果可能因开发者经验、任务熟悉度、代码库和使用方式而异", "importance": "critical"}
+      ],
+      "forbidden_claims": ["将厂商赞助的单项实验直接推广到所有企业", "只用代码行数或建议接受率代表生产率"],
+      "source_policy": {"preferred_types": ["academic", "reputable_research", "filing"], "minimum_authoritative_sources": 6, "time_sensitive": true},
+      "evaluation_contract": {"expected_intent": {"research_type": "academic_review", "should_clarify": false}, "mechanism_tags": {"evidence_conflict_expected": true}, "strata": {"difficulty": "medium", "domain": "developer_productivity"}},
+      "sample_reason": "多指标冲突与企业实验设计题"
+    }
+  ]
+}

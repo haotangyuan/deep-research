@@ -85,6 +85,7 @@ class EvidenceItem(BaseModel):
 
 class BranchEvidencePackage(BaseModel):
     branch_index: int
+    task_key: str | None = None
     task_title: str
     research_topic: str
     branch_summary: str

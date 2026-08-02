@@ -66,9 +66,6 @@ CREATE TABLE IF NOT EXISTS `research_artifact` (
   `response_model` varchar(256) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '响应模型名',
   `prompt_version` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'prompt 版本',
   `prompt_sha256` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'prompt sha256',
-  `input_tokens` bigint unsigned DEFAULT NULL COMMENT '输入 token',
-  `output_tokens` bigint unsigned DEFAULT NULL COMMENT '输出 token',
-  `duration_ms` bigint unsigned DEFAULT NULL COMMENT '耗时',
   `outcome` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'success/failed',
   `fallback_used` int unsigned DEFAULT NULL COMMENT '是否降级 0/1',
   `metadata_json` text COLLATE utf8mb4_unicode_ci COMMENT '附加元数据',
@@ -104,8 +101,7 @@ CREATE TABLE IF NOT EXISTS `research_llm_call` (
   PRIMARY KEY (`id`),
   KEY `idx_research_llm_call_run` (`run_id`),
   KEY `idx_research_llm_call_research` (`research_id`),
-  KEY `idx_research_llm_call_stage` (`stage_name`),
-  UNIQUE KEY `uniq_research_llm_call_run` (`run_id`,`id`)
+  KEY `idx_research_llm_call_stage` (`stage_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='LLM 调用 token 事实源';
 
 CREATE TABLE IF NOT EXISTS `research_stage_usage` (
@@ -139,7 +135,7 @@ CREATE TABLE IF NOT EXISTS `research_claim_manifest` (
   `claim_text` mediumtext COLLATE utf8mb4_unicode_ci COMMENT 'claim 文本',
   `section_id` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '章节ID',
   `importance` varchar(32) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'critical/major/minor',
-  `citation_id` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '引用标识（无引用则 NULL）',
+  `citation_id` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '引用标识（无引用则 __none__）',
   `citation_url` varchar(1024) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '引用 URL',
   `citation_excerpt` text COLLATE utf8mb4_unicode_ci COMMENT '引用片段',
   `evidence_id` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '证据ID',
@@ -152,29 +148,6 @@ CREATE TABLE IF NOT EXISTS `research_claim_manifest` (
   KEY `idx_research_claim_manifest_report` (`report_artifact_id`),
   UNIQUE KEY `uniq_research_claim_manifest_key` (`run_id`,`report_artifact_id`,`claim_id`,`citation_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='claim-citation 清单';
-
--- ===========================================================================
--- 1.5. trace 标量本地落地表（observability 导出 Langfuse 的同时落本表，供 eval 读取）
---     与 research_artifact 严格分工：artifact 存产出全文，本表只存标量，
---     同一份标量不两处重复落库。幂等键 (run_id, span_scope, round_no, attr_key)。
--- ===========================================================================
-CREATE TABLE IF NOT EXISTS `research_span_attribute` (
-  `id` char(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '行ID',
-  `run_id` char(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'run_id',
-  `research_id` char(32) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '研究ID',
-  `trace_id` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'OTel trace_id，§18 score→trace 直链',
-  `span_scope` varchar(64) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'span 作用域：UltraDynamicReview / UltraReportGate',
-  `round_no` int unsigned DEFAULT 0 COMMENT '动态轮次（无 round 概念归 0）',
-  `attr_key` varchar(96) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '属性键，与 span 属性同名',
-  `attr_value_num` decimal(20,4) DEFAULT NULL COMMENT '数值类标量',
-  `attr_value_str` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT '字符串类标量',
-  `attr_value_json` text COLLATE utf8mb4_unicode_ci COMMENT '结构化标量',
-  `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
-  PRIMARY KEY (`id`),
-  KEY `idx_research_span_attribute_run` (`run_id`),
-  KEY `idx_research_span_attribute_trace` (`trace_id`),
-  UNIQUE KEY `uniq_research_span_attribute_key` (`run_id`,`span_scope`,`round_no`,`attr_key`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='trace 标量本地落地，供 eval 读取';
 
 -- ===========================================================================
 -- 2. 列级补建存储过程（幂等：列已存在则跳过）

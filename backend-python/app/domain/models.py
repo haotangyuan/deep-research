@@ -203,8 +203,8 @@ class ResearchContextEdge(Base):
 # ---------------------------------------------------------------------------
 # Eval MVP v2 — 落库链路（Commit 1）
 # 见 docs/deep-research-eval-mvp-v2-tier-mechanism.md §6。
-# research_run / research_artifact / research_llm_call / research_stage_usage /
-# research_claim_manifest。无外键，按 ID 约定关联，与既有表一致。
+# 核心 Eval 读取 research_run / research_artifact / research_llm_call /
+# research_claim_manifest；research_stage_usage 仅是业务聚合投影。
 # ---------------------------------------------------------------------------
 
 
@@ -273,9 +273,6 @@ class ResearchArtifact(Base):
     response_model: Mapped[str | None] = mapped_column(String(256))
     prompt_version: Mapped[str | None] = mapped_column(String(64))
     prompt_sha256: Mapped[str | None] = mapped_column(String(64))
-    input_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    output_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    duration_ms: Mapped[int | None] = mapped_column(BigInteger)
     outcome: Mapped[str | None] = mapped_column(String(32))
     fallback_used: Mapped[int | None] = mapped_column(Integer)
     metadata_json: Mapped[str | None] = mapped_column(Text)
@@ -291,41 +288,6 @@ class ResearchArtifact(Base):
             "angle",
             "content_sha256",
             name="uniq_research_artifact_key",
-        ),
-    )
-
-
-class ResearchSpanAttribute(Base):
-    """trace 标量本地落地（observability 在导出 Langfuse 的同时落本表）。
-
-    供 eval 读取 ULTRA 动态决策标量（review 投票/consensus/各维度分、
-    report quality 摘要）。幂等键 (run_id, span_scope, round_no, attr_key)，
-    replay 时 ON DUPLICATE KEY UPDATE 覆盖。
-    与 ``research_artifact`` 严格分工：artifact 存产出全文，本表只存标量，
-    同一份标量不两处重复落库（去重原则）。
-    """
-
-    __tablename__ = "research_span_attribute"
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    run_id: Mapped[str] = mapped_column(String(32), index=True)
-    research_id: Mapped[str] = mapped_column(String(32), index=True)
-    trace_id: Mapped[str | None] = mapped_column(String(64), index=True)
-    span_scope: Mapped[str] = mapped_column(String(64))
-    round_no: Mapped[int | None] = mapped_column(Integer)
-    attr_key: Mapped[str] = mapped_column(String(96))
-    attr_value_num: Mapped[float | None] = mapped_column(Numeric(20, 4))
-    attr_value_str: Mapped[str | None] = mapped_column(String(512))
-    attr_value_json: Mapped[str | None] = mapped_column(Text)
-    create_time: Mapped[datetime | None] = mapped_column(DateTime)
-
-    __table_args__ = (
-        UniqueConstraint(
-            "run_id",
-            "span_scope",
-            "round_no",
-            "attr_key",
-            name="uniq_research_span_attribute_key",
         ),
     )
 
@@ -354,11 +316,6 @@ class ResearchLlmCall(Base):
     error_type: Mapped[str | None] = mapped_column(String(128))
     start_time: Mapped[datetime | None] = mapped_column(DateTime)
     end_time: Mapped[datetime | None] = mapped_column(DateTime)
-
-    __table_args__ = (
-        UniqueConstraint("run_id", "id", name="uniq_research_llm_call_run"),
-    )
-
 
 class ResearchStageUsage(Base):
     """阶段级 token/调用投影，由 research_llm_call 聚合，不从 state.total_* 读。"""
@@ -442,8 +399,8 @@ class EvalDatasetItem(Base):
     dataset_version: Mapped[str] = mapped_column(String(64), index=True)
     source_research_id: Mapped[str | None] = mapped_column(String(32))
     source_run_id: Mapped[str | None] = mapped_column(String(32))
-    query_snapshot: Mapped[str | None] = mapped_column(MEDIUMTEXT)
-    query_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    query_snapshot: Mapped[str] = mapped_column(MEDIUMTEXT)
+    query_sha256: Mapped[str] = mapped_column(String(64))
     task_type: Mapped[str | None] = mapped_column(String(64), index=True)
     language: Mapped[str | None] = mapped_column(String(16))
     as_of_date: Mapped[str | None] = mapped_column(Date)
@@ -451,12 +408,21 @@ class EvalDatasetItem(Base):
     reference_facts_json: Mapped[str | None] = mapped_column(Text)
     forbidden_claims_json: Mapped[str | None] = mapped_column(Text)
     source_policy_json: Mapped[str | None] = mapped_column(Text)
-    original_budget_level: Mapped[str | None] = mapped_column(String(16))
+    evaluation_contract_json: Mapped[str | None] = mapped_column(Text)
     privacy_status: Mapped[str | None] = mapped_column(String(32))
     annotation_status: Mapped[str | None] = mapped_column(String(32))
     sample_reason: Mapped[str | None] = mapped_column(String(64))
     split_name: Mapped[str | None] = mapped_column(String(32), index=True)
     create_time: Mapped[datetime | None] = mapped_column(DateTime)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "dataset_name",
+            "dataset_version",
+            "query_sha256",
+            name="uniq_eval_dataset_item_query",
+        ),
+    )
 
 
 class EvalExperiment(Base):
@@ -466,9 +432,9 @@ class EvalExperiment(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
-    dataset_name: Mapped[str | None] = mapped_column(String(128), index=True)
-    dataset_version: Mapped[str | None] = mapped_column(String(64))
-    experiment_type: Mapped[str | None] = mapped_column(String(64), index=True)
+    dataset_name: Mapped[str] = mapped_column(String(128), index=True)
+    dataset_version: Mapped[str] = mapped_column(String(64))
+    experiment_type: Mapped[str] = mapped_column(String(64), index=True)
     baseline_experiment_id: Mapped[str | None] = mapped_column(String(32))
     workflow_version: Mapped[str | None] = mapped_column(String(64))
     evaluator_version: Mapped[str | None] = mapped_column(String(64))
@@ -485,20 +451,15 @@ class EvalCaseRun(Base):
     __tablename__ = "eval_case_run"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    experiment_id: Mapped[str | None] = mapped_column(String(32), index=True)
-    dataset_item_id: Mapped[str | None] = mapped_column(String(32), index=True)
-    research_id: Mapped[str | None] = mapped_column(String(32))
+    experiment_id: Mapped[str] = mapped_column(String(32), index=True)
+    dataset_item_id: Mapped[str] = mapped_column(String(32), index=True)
     run_id: Mapped[str | None] = mapped_column(String(32), index=True)
-    variant_name: Mapped[str | None] = mapped_column(String(128))
+    variant_name: Mapped[str] = mapped_column(String(128))
     repeat_no: Mapped[int] = mapped_column(Integer, default=0)
     gate_passed: Mapped[int | None] = mapped_column(Integer)
     failure_reasons_json: Mapped[str | None] = mapped_column(Text)
     total_score: Mapped[float | None] = mapped_column(Numeric(8, 4))
-    input_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    output_tokens: Mapped[int | None] = mapped_column(BigInteger)
-    duration_ms: Mapped[int | None] = mapped_column(BigInteger)
     estimated_cost: Mapped[float | None] = mapped_column(Numeric(12, 6))
-    result_json: Mapped[str | None] = mapped_column(MEDIUMTEXT)
     create_time: Mapped[datetime | None] = mapped_column(DateTime)
 
     __table_args__ = (
@@ -518,21 +479,17 @@ class EvalScore(Base):
     __tablename__ = "eval_score"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    case_run_id: Mapped[str | None] = mapped_column(String(32), index=True)
-    metric_name: Mapped[str | None] = mapped_column(String(128), index=True)
+    case_run_id: Mapped[str] = mapped_column(String(32), index=True)
+    metric_name: Mapped[str] = mapped_column(String(128), index=True)
     metric_group: Mapped[str | None] = mapped_column(String(64))
     score_value: Mapped[float | None] = mapped_column(Numeric(10, 6))
     label_value: Mapped[str | None] = mapped_column(String(64))
     passed: Mapped[int | None] = mapped_column(Integer)
-    evaluator_name: Mapped[str | None] = mapped_column(String(128))
-    evaluator_version: Mapped[str | None] = mapped_column(String(64))
+    evaluator_name: Mapped[str] = mapped_column(String(128))
+    evaluator_version: Mapped[str] = mapped_column(String(64))
     judge_model: Mapped[str | None] = mapped_column(String(256))
     reason: Mapped[str | None] = mapped_column(Text)
     details_json: Mapped[str | None] = mapped_column(MEDIUMTEXT)
-    # §18「结果可以跳转到对应 Trace 和 Artifact」：score 行直链 trace_id + report_artifact_id，
-    # 避免从 score → case_run → run → trace 多跳。
-    trace_id: Mapped[str | None] = mapped_column(String(64), index=True)
-    report_artifact_id: Mapped[str | None] = mapped_column(String(32), index=True)
     create_time: Mapped[datetime | None] = mapped_column(DateTime)
 
     __table_args__ = (

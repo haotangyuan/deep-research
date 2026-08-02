@@ -186,23 +186,6 @@ class ScopeAgent:
             )
             state.research_question = question
             state.research_brief = research_brief
-            # Eval MVP v2：research_brief 落库
-            if state.run_id:
-                from app.infrastructure.eval_repository import eval_repository, safe_record
-
-                await safe_record(
-                    lambda: eval_repository.upsert_artifact(
-                        run_id=state.run_id,
-                        research_id=state.research_id,
-                        artifact_type="research_brief",
-                        stage_name="ScopeAgent",
-                        round_no=0,
-                        content=research_brief,
-                        outcome="success",
-                        fallback_used=0,
-                    ),
-                    context=f"research_brief research_id={state.research_id}",
-                )
             # 意图识别：解析研究类型（借鉴点 E，零额外 LLM 调用）
             research_type = str(question.get("researchType") or "general").strip().lower()
             try:
@@ -233,6 +216,31 @@ class ScopeAgent:
                     },
                 )
             state.research_type_candidates = candidates[:3]
+            # Eval 事实源：Brief 与其结构化意图放在同一个 Artifact，避免 Eval
+            # 再从 workflow_event 或 span 拼装重复数据。
+            if state.run_id:
+                from app.infrastructure.eval_repository import eval_repository, safe_record
+
+                await safe_record(
+                    lambda: eval_repository.upsert_artifact(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        artifact_type="research_brief",
+                        stage_name="ScopeAgent",
+                        round_no=0,
+                        content=research_brief,
+                        outcome="success",
+                        fallback_used=0,
+                        metadata={
+                            "research_type": state.research_type,
+                            "type_confidence": state.research_type_confidence,
+                            "type_reason": state.research_type_reason,
+                            "type_candidates": state.research_type_candidates,
+                            "clarification": state.clarify_with_user_schema or {},
+                        },
+                    ),
+                    context=f"research_brief research_id={state.research_id}",
+                )
             await event_publisher.publish_event(
                 state.research_id,
                 EventType.AGENT_RUNTIME,
@@ -336,6 +344,43 @@ class SupervisorAgent:
         )
         state.add_token_usage(response.token_usage)
         tasks = self._parse_research_tasks(response.ai_message.text, state)
+        # Eval 事实源：每轮 Plan 统一落 research_artifact，Eval 无需依赖
+        # research_work_item/research_planning_round 这两张业务过程表。
+        if state.run_id:
+            from app.infrastructure.eval_repository import eval_repository, safe_record
+
+            plan_content = json.dumps(
+                {
+                    "round_no": max(1, state.dynamic_round_no),
+                    "tasks": [
+                        {
+                            "task_key": task.task_id,
+                            "title": task.title,
+                            "research_topic": task.research_topic,
+                            "priority": "high" if task.index == 0 else "normal",
+                        }
+                        for task in tasks
+                    ],
+                },
+                ensure_ascii=False,
+            )
+            await safe_record(
+                lambda: eval_repository.upsert_artifact(
+                    run_id=state.run_id,
+                    research_id=state.research_id,
+                    artifact_type="research_plan",
+                    stage_name="SupervisorAgent",
+                    round_no=max(1, state.dynamic_round_no),
+                    content=plan_content,
+                    outcome="success",
+                    fallback_used=0,
+                    metadata={"task_count": len(tasks)},
+                ),
+                context=(
+                    f"research_plan research_id={state.research_id} "
+                    f"round={max(1, state.dynamic_round_no)}"
+                ),
+            )
         formatted = self._format_task_list(tasks)
         await event_publisher.publish_event(
             state.research_id,
@@ -704,6 +749,7 @@ class ResearcherAgent:
             sources = self._fallback_researcher_sources(state)
             state.branch_evidence_package = BranchEvidencePackage(
                 branch_index=branch_index_from_task_id(state.agent_task_id),
+                task_key=state.agent_task_id,
                 task_title=state.research_topic or "",
                 research_topic=state.research_topic or "",
                 branch_summary=truncate(findings, 1200),
@@ -746,6 +792,7 @@ class ResearcherAgent:
             findings, sources = self._parse_compressed_research(text, state)
             package = BranchEvidencePackage(
                 branch_index=branch_index,
+                task_key=state.agent_task_id,
                 task_title=state.research_topic or "",
                 research_topic=state.research_topic or "",
                 branch_summary=truncate(findings, 1200),
@@ -779,6 +826,7 @@ class ResearcherAgent:
             )
         package = BranchEvidencePackage(
             branch_index=branch_index,
+            task_key=state.agent_task_id,
             task_title=state.research_topic or "",
             research_topic=state.research_topic or "",
             branch_summary=str(data.get("branchSummary") or findings),
@@ -1163,6 +1211,41 @@ class ReportAgent:
             from app.infrastructure.eval_repository import eval_repository, safe_record
 
             report_text = state.report
+            source_catalog: list[dict[str, str]] = []
+            citation_audit: dict = {}
+            try:
+                from app.application.claim_manifest import normalize_report_citations
+
+                source_catalog = await eval_repository.load_source_catalog(state.run_id)
+                _, citation_audit = normalize_report_citations(
+                    report_text,
+                    source_catalog=source_catalog,
+                )
+                await safe_record(
+                    lambda: eval_repository.upsert_artifact(
+                        run_id=state.run_id,
+                        research_id=state.research_id,
+                        artifact_type="report_citation_audit",
+                        stage_name="ReportAgent:citation-audit",
+                        round_no=state.dynamic_round_no,
+                        content=json.dumps(citation_audit, ensure_ascii=False),
+                        outcome=(
+                            "success"
+                            if not citation_audit.get("unresolved_marker_ids")
+                            else "unresolved_citations"
+                        ),
+                        metadata={
+                            "resolved_count": len(citation_audit.get("resolved_marker_ids") or []),
+                            "unresolved_count": len(citation_audit.get("unresolved_marker_ids") or []),
+                        },
+                    ),
+                    context=f"report_citation_audit research_id={state.research_id}",
+                )
+            except Exception:
+                logger.exception(
+                    "report citation audit failed research_id=%s",
+                    state.research_id,
+                )
             try:
                 report_artifact_id = await eval_repository.upsert_artifact(
                     run_id=state.run_id,
@@ -1186,17 +1269,19 @@ class ReportAgent:
             try:
                 from app.application.claim_manifest import extract_claims_from_report
 
-                claims = extract_claims_from_report(report_text)
-                if claims:
-                    await safe_record(
-                        lambda: eval_repository.write_claim_manifest(
-                            state.run_id,
-                            state.research_id,
-                            report_artifact_id,
-                            claims,
-                        ),
-                        context=f"claim_manifest research_id={state.research_id}",
-                    )
+                claims = extract_claims_from_report(
+                    report_text,
+                    source_catalog=source_catalog,
+                )
+                await safe_record(
+                    lambda: eval_repository.replace_claim_manifest(
+                        state.run_id,
+                        state.research_id,
+                        report_artifact_id,
+                        claims,
+                    ),
+                    context=f"claim_manifest research_id={state.research_id}",
+                )
             except Exception:
                 logger.exception(
                     "claim manifest extraction failed research_id=%s",

@@ -26,6 +26,13 @@ class EvalContext:
     case_run_id: str
     report: str  # 最终报告 Markdown
     dataset_item: dict[str, Any] = field(default_factory=dict)
+    # 过程 Eval 的唯一 Artifact 输入。均来自 research_artifact，不从 workflow_event、
+    # research_span_attribute 等重复观测表拼装。
+    research_brief: str = ""
+    intent_metadata: dict[str, Any] = field(default_factory=dict)
+    research_plans: list[dict[str, Any]] = field(default_factory=list)
+    evidence_items: list[dict[str, Any]] = field(default_factory=list)
+    round_reviews: list[dict[str, Any]] = field(default_factory=list)
     # claim-citation manifest（claim_id -> {citations, importance, ...}）
     claim_manifest: list[dict[str, Any]] = field(default_factory=list)
     # 来源快照（每个含 url/title/score 等元数据，来自 research_artifact(type=source_snapshot)）
@@ -44,12 +51,10 @@ class EvalContext:
     # 机制维度（可选）
     round_no: int | None = None
     reviewer_lenses: list[str] = field(default_factory=list)
-    # trace 标量本地落地（research_span_attribute）读取：
-    # {round_no: {attr_key: value}}，含 review 投票/consensus/各维度分/gaps/next_action。
-    # 由 runner 读 research_span_attribute(span_scope=UltraDynamicReview) 装配。
+    # 从 round_review Artifact 派生的兼容视图：
+    # {round_no: {attr_key: value}}，含 review 投票、评分、Gap 和 next_action。
     review_attributes: dict[int, dict[str, Any]] = field(default_factory=dict)
-    # report quality 摘要（research_span_attribute(span_scope=UltraReportGate)）：
-    # {status / weak_sections / blocking_gaps}
+    # 从最后一轮 round_review 派生的报告质量摘要。
     report_quality: dict[str, Any] = field(default_factory=dict)
     # HardGate 后置聚合用：其他 evaluator 已产出的结果（metric_name -> MetricResult）。
     # 由 runner 在两阶段跑完后填充，HardGate 只读。

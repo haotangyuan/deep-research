@@ -104,7 +104,8 @@ class DeterministicEvaluator(BaseEvaluator):
             for c in manifest
             if any((cit.get("citation_url") for cit in (c.get("citations") or [])))
         )
-        trace_rate = (cited / total_claims) if total_claims else 1.0
+        # 无 manifest 不是“100% 可追溯”，而是不可评估；否则空报告会把档位均值虚高。
+        trace_rate = (cited / total_claims) if total_claims else None
         results.append(
             MetricResult(
                 metric_name="citation_traceability",
@@ -112,8 +113,12 @@ class DeterministicEvaluator(BaseEvaluator):
                 evaluator_name=self.name,
                 evaluator_version=self.version,
                 score_value=trace_rate,
-                passed=1 if trace_rate >= 0.95 else 0,
-                reason=f"cited={cited}/{total_claims}",
+                passed=(1 if trace_rate >= 0.95 else 0) if trace_rate is not None else None,
+                reason=(
+                    f"cited={cited}/{total_claims}"
+                    if total_claims
+                    else "claim_manifest 为空，citation_traceability 不可评估"
+                ),
             )
         )
 

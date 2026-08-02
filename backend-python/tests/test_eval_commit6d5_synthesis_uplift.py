@@ -102,6 +102,23 @@ def test_build_paired_diff_report_single_variant() -> None:
     assert "仅一个 variant" in report
 
 
+def test_build_paired_diff_report_ignores_unpaired_runs_for_delta() -> None:
+    summary = {
+        "MEDIUM": {
+            "item1::0": {"required_point_coverage": 0.2},
+            "item2::0": {"required_point_coverage": 1.0},
+        },
+        "HIGH": {
+            "item1::0": {"required_point_coverage": 0.5},
+        },
+    }
+    report = build_paired_diff_report(summary)
+    # 只比较共同的 item1::0：0.5 - 0.2 = 0.3。
+    # 如果错误地用两个 Variant 的总体均值相减，会得到 -0.1。
+    assert "+0.3000" in report
+    assert "-0.1000" not in report
+
+
 def test_build_paired_diff_report_empty() -> None:
     report = build_paired_diff_report({})
     assert "无数据" in report

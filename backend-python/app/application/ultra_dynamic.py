@@ -589,39 +589,6 @@ class UltraDynamicRoundCoordinator:
                 if isinstance(score, (int, float)):
                     span.set_attribute(f"review.score.{dim}", int(score))
 
-            # trace 标量本地落地（observability 导出 Langfuse 的同时落 research_span_attribute，
-            # 供 eval 读取机制指标；set_attribute 调用一个不删，Langfuse 导出不受影响）。
-            # 复用已算的局部变量，不重复计算；与 round_review artifact metadata 严格分工：
-            # votes/consensus/各维度分只在本表存一份，artifact metadata 不重复落库。
-            if state.run_id:
-                from app.infrastructure.eval_repository import eval_repository, safe_record
-
-                review_attrs = {
-                    "review.next.action": next_action,
-                    "review.continue.votes": continue_count,
-                    "review.report.votes": report_count,
-                    "review.total.votes": len(votes),
-                    "review.consensus": consensus,
-                    "review.lens.count": len(lenses),
-                    "review.continue.threshold": threshold,
-                    "review.gaps.count": len(all_gaps[:5]),
-                }
-                for dim in ("coverage", "evidence", "freshness", "sourceDiversity", "consistency"):
-                    dim_score = merged_scores.get(dim)
-                    if isinstance(dim_score, (int, float)):
-                        review_attrs[f"review.score.{dim}"] = int(dim_score)
-                await safe_record(
-                    lambda: eval_repository.upsert_span_attributes(
-                        run_id=state.run_id,
-                        research_id=state.research_id,
-                        trace_id=state.run_trace_id,
-                        span_scope="UltraDynamicReview",
-                        round_no=round_no,
-                        attrs=review_attrs,
-                    ),
-                    context=f"span_attribute review research_id={state.research_id} round={round_no}",
-                )
-
             return {
                 "nextAction": next_action,
                 "strategy": f"{continue_count}/{len(votes)} 评审同意 {'继续补强' if next_action == 'continue' else '进入报告'}",

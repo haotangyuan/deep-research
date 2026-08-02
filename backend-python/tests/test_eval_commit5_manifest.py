@@ -17,7 +17,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.application.agents import ReportAgent
-from app.application.claim_manifest import extract_claims_from_report
+from app.application.claim_manifest import (
+    extract_claims_from_report,
+    extract_reference_map,
+    normalize_report_citations,
+)
 
 
 def test_extract_empty_or_short_returns_empty() -> None:
@@ -72,6 +76,66 @@ def test_extract_section_id_propagated() -> None:
     assert claims[0]["section_id"] == "intro"
 
 
+@pytest.mark.parametrize(
+    ("references", "expected_url"),
+    [
+        ("[1] [官方报告](https://example.com/a)", "https://example.com/a"),
+        ("| [1] | 官方报告 | https://example.com/b | 标准 |", "https://example.com/b"),
+        ("[1] 官方报告: https://example.com/c", "https://example.com/c"),
+        ("[1] 官方报告\nhttps://example.com/d", "https://example.com/d"),
+    ],
+)
+def test_numeric_marker_resolves_common_reference_formats(
+    references: str,
+    expected_url: str,
+) -> None:
+    report = (
+        "NIST 在 2023 年发布该框架，包含四个核心功能[1]。\n\n"
+        "## 来源\n"
+        f"{references}"
+    )
+    claims = extract_claims_from_report(report)
+    assert len(claims) == 1
+    assert claims[0]["citations"][0]["citation_url"] == expected_url
+    # 来源列表是索引，不应被重复抽成事实 Claim。
+    assert "官方报告" not in claims[0]["claim_text"]
+
+
+def test_missing_reference_stays_dangling_and_is_audited() -> None:
+    report = "一个关键结论在 2025 年增长 18%[2]。\n\n## 参考来源\n[1] A: https://a.com"
+    _, audit = normalize_report_citations(report)
+    assert audit["marker_ids"] == ["2"]
+    assert audit["resolved_marker_ids"] == []
+    assert audit["unresolved_marker_ids"] == ["2"]
+    claims = extract_claims_from_report(report)
+    assert not claims[0]["citations"][0].get("citation_url")
+
+
+def test_reference_title_can_resolve_from_source_catalog_conservatively() -> None:
+    report = "该标准在风险治理生命周期中明确包含四个核心功能[1]。\n\n## Sources\n[1] NIST AI Risk Management Framework"
+    references = extract_reference_map(
+        report,
+        source_catalog=[
+            {
+                "title": "NIST AI Risk Management Framework",
+                "url": "https://www.nist.gov/itl/ai-risk-management-framework",
+                "evidence_id": "source-1",
+            }
+        ],
+    )
+    assert references["1"]["citation_url"].startswith("https://www.nist.gov/")
+    claims = extract_claims_from_report(
+        report,
+        source_catalog=[
+            {
+                "title": "NIST AI Risk Management Framework",
+                "url": "https://www.nist.gov/itl/ai-risk-management-framework",
+            }
+        ],
+    )
+    assert claims[0]["citations"][0]["citation_url"].startswith("https://www.nist.gov/")
+
+
 class _Artifacts:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -83,6 +147,12 @@ class _Artifacts:
     async def write_claim_manifest(self, run_id, research_id, report_artifact_id, claims):
         self.calls.append({"_kind": "manifest", "report_artifact_id": report_artifact_id, "claims": claims})
         return len(claims)
+
+    async def replace_claim_manifest(self, run_id, research_id, report_artifact_id, claims):
+        return await self.write_claim_manifest(run_id, research_id, report_artifact_id, claims)
+
+    async def load_source_catalog(self, _run_id):
+        return []
 
 
 async def _noop_event(*_args, **_kwargs) -> int:
@@ -102,8 +172,12 @@ async def test_verify_report_claims_persists_per_claim_artifacts(monkeypatch) ->
         recorded.upsert_artifact,
     )
     monkeypatch.setattr(
-        "app.infrastructure.eval_repository.eval_repository.write_claim_manifest",
-        recorded.write_claim_manifest,
+        "app.infrastructure.eval_repository.eval_repository.replace_claim_manifest",
+        recorded.replace_claim_manifest,
+    )
+    monkeypatch.setattr(
+        "app.infrastructure.eval_repository.eval_repository.load_source_catalog",
+        recorded.load_source_catalog,
     )
 
     # ClaimVerifier 返回全部 verified，避免报告被改写（便于断言 report 不变）

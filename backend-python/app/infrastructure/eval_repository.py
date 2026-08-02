@@ -15,9 +15,8 @@ import uuid
 from collections.abc import Iterable
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
-from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.timeutil import now_local
 from app.domain.models import (
@@ -29,7 +28,6 @@ from app.domain.models import (
     ResearchClaimManifest,
     ResearchLlmCall,
     ResearchRun,
-    ResearchSpanAttribute,
     ResearchStageUsage,
 )
 from app.infrastructure.db import SessionLocal
@@ -207,9 +205,6 @@ class EvalRepository:
         response_model: str | None = None,
         prompt_version: str | None = None,
         prompt_sha256: str | None = None,
-        input_tokens: int | None = None,
-        output_tokens: int | None = None,
-        duration_ms: int | None = None,
         outcome: str | None = None,
         fallback_used: int | None = None,
         metadata: dict | None = None,
@@ -243,9 +238,6 @@ class EvalRepository:
                 response_model=response_model,
                 prompt_version=prompt_version,
                 prompt_sha256=prompt_sha256,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                duration_ms=duration_ms,
                 outcome=outcome,
                 fallback_used=fallback_used,
                 metadata_json=_json_dumps(metadata) if metadata else None,
@@ -263,9 +255,6 @@ class EvalRepository:
                 "response_model": response_model,
                 "prompt_version": prompt_version,
                 "prompt_sha256": prompt_sha256,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "duration_ms": duration_ms,
                 "update_time": now,
             }
             stmt = stmt.on_duplicate_key_update(**update_cols)
@@ -283,69 +272,6 @@ class EvalRepository:
             )
             existing = await session.scalar(stmt)
             return existing.id if existing else artifact_id
-
-    async def upsert_span_attributes(
-        self,
-        *,
-        run_id: str,
-        research_id: str,
-        span_scope: str,
-        attrs: dict[str, object],
-        trace_id: str | None = None,
-        round_no: int | None = None,
-    ) -> None:
-        """trace 标量本地落地（observability 导出 Langfuse 的同时落本表）。
-
-        幂等键 (run_id, span_scope, round_no, attr_key)；replay 时覆盖。
-        与 upsert_artifact 严格分工：artifact 存产出全文，本表只存标量，
-        同一份标量不两处重复落库（去重原则）。失败由调用方 safe_record 吞。
-        """
-        round_key = round_no if round_no is not None else 0
-        now = now_local()
-        rows: list[dict[str, object]] = []
-        for attr_key, value in (attrs or {}).items():
-            if value is None:
-                continue
-            num_val: float | None = None
-            str_val: str | None = None
-            json_val: str | None = None
-            if isinstance(value, bool):
-                # bool 是 int 子类，单独处理为数值 0/1
-                num_val = float(int(value))
-            elif isinstance(value, (int, float)):
-                num_val = float(value)
-            elif isinstance(value, str):
-                str_val = value
-            else:
-                json_val = _json_dumps(value)
-            rows.append(
-                {
-                    "id": _new_id(),
-                    "run_id": run_id,
-                    "research_id": research_id,
-                    "trace_id": trace_id,
-                    "span_scope": span_scope,
-                    "round_no": round_key,
-                    "attr_key": attr_key,
-                    "attr_value_num": num_val,
-                    "attr_value_str": str_val,
-                    "attr_value_json": json_val,
-                    "create_time": now,
-                }
-            )
-        if not rows:
-            return
-        async with SessionLocal() as session:
-            for row in rows:
-                stmt = mysql_insert(ResearchSpanAttribute).values(**row)
-                stmt = stmt.on_duplicate_key_update(
-                    trace_id=row["trace_id"],
-                    attr_value_num=row["attr_value_num"],
-                    attr_value_str=row["attr_value_str"],
-                    attr_value_json=row["attr_value_json"],
-                )
-                await session.execute(stmt)
-            await session.commit()
 
     async def record_llm_call(
         self,
@@ -588,6 +514,91 @@ class EvalRepository:
                 written += 1
         return written
 
+    async def replace_claim_manifest(
+        self,
+        run_id: str,
+        research_id: str,
+        report_artifact_id: str | None,
+        claims: Iterable[dict],
+    ) -> int:
+        """用最终报告的当前抽取结果替换 Manifest，清除旧提取器遗留的幽灵 Claim。"""
+        written = 0
+        async with SessionLocal() as session:
+            await session.execute(
+                delete(ResearchClaimManifest).where(ResearchClaimManifest.run_id == run_id)
+            )
+            for claim in claims:
+                claim_id = claim.get("claim_id")
+                claim_text = claim.get("claim_text") or claim.get("text")
+                citations = claim.get("citations") or [{"citation_id": "__none__"}]
+                for citation in citations:
+                    now = now_local()
+                    stmt = mysql_insert(ResearchClaimManifest).values(
+                        id=_new_id(),
+                        run_id=run_id,
+                        research_id=research_id,
+                        report_artifact_id=report_artifact_id,
+                        claim_id=claim_id,
+                        claim_text=claim_text,
+                        section_id=claim.get("section_id"),
+                        importance=claim.get("importance"),
+                        citation_id=citation.get("citation_id"),
+                        citation_url=citation.get("citation_url") or citation.get("url"),
+                        citation_excerpt=citation.get("excerpt"),
+                        evidence_id=citation.get("evidence_id"),
+                        verifiable=citation.get("verifiable"),
+                        metadata_json=(
+                            _json_dumps(citation.get("metadata"))
+                            if citation.get("metadata")
+                            else None
+                        ),
+                        create_time=now,
+                    )
+                    stmt = stmt.on_duplicate_key_update(
+                        claim_text=claim_text,
+                        section_id=claim.get("section_id"),
+                        importance=claim.get("importance"),
+                        citation_url=citation.get("citation_url") or citation.get("url"),
+                        citation_excerpt=citation.get("excerpt"),
+                        evidence_id=citation.get("evidence_id"),
+                        verifiable=citation.get("verifiable"),
+                    )
+                    await session.execute(stmt)
+                    written += 1
+            await session.commit()
+        return written
+
+    async def load_source_catalog(self, run_id: str) -> list[dict[str, str]]:
+        """读取本次 Run 已持久化的来源标题和 URL，供引用编号解析使用。"""
+        async with SessionLocal() as session:
+            artifacts = (
+                await session.scalars(
+                    select(ResearchArtifact).where(
+                        ResearchArtifact.run_id == run_id,
+                        ResearchArtifact.artifact_type == "source_snapshot",
+                    )
+                )
+            ).all()
+        catalog: list[dict[str, str]] = []
+        seen_urls: set[str] = set()
+        for artifact in artifacts:
+            try:
+                metadata = json.loads(artifact.metadata_json or "{}")
+            except (TypeError, ValueError):
+                metadata = {}
+            url = str(metadata.get("url") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            catalog.append(
+                {
+                    "url": url,
+                    "title": str(metadata.get("title") or "").strip(),
+                    "evidence_id": artifact.id,
+                }
+            )
+        return catalog
+
     # ------------------------------------------------------------------
     # Eval 数据层（Commit 6）：dataset_item / experiment / case_run / score
     # ------------------------------------------------------------------
@@ -608,19 +619,23 @@ class EvalRepository:
         reference_facts: list | dict | None = None,
         forbidden_claims: list | dict | None = None,
         source_policy: dict | None = None,
-        original_budget_level: str | None = None,
+        evaluation_contract: dict | None = None,
         privacy_status: str = "candidate",
         annotation_status: str = "ready",
         sample_reason: str | None = None,
         split_name: str | None = None,
     ) -> str:
-        """幂等写入 dataset_item；按 ``query_sha256`` 去重（同一题目不重复入集）。"""
+        """幂等写入 dataset_item；同一 dataset 版本内按 query_sha256 去重。"""
         query_sha256 = _sha256(query_snapshot)
         now = now_local()
         item_id = item_id or _new_id()
         async with SessionLocal() as session:
             existing = await session.scalar(
-                select(EvalDatasetItem).where(EvalDatasetItem.query_sha256 == query_sha256)
+                select(EvalDatasetItem).where(
+                    EvalDatasetItem.dataset_name == dataset_name,
+                    EvalDatasetItem.dataset_version == dataset_version,
+                    EvalDatasetItem.query_sha256 == query_sha256,
+                )
             )
             if existing is not None:
                 return existing.id
@@ -640,7 +655,7 @@ class EvalRepository:
                     reference_facts_json=_json_dumps(reference_facts),
                     forbidden_claims_json=_json_dumps(forbidden_claims),
                     source_policy_json=_json_dumps(source_policy),
-                    original_budget_level=original_budget_level,
+                    evaluation_contract_json=_json_dumps(evaluation_contract),
                     privacy_status=privacy_status,
                     annotation_status=annotation_status,
                     sample_reason=sample_reason,
@@ -703,11 +718,24 @@ class EvalRepository:
         dataset_item_id: str,
         variant_name: str,
         repeat_no: int = 0,
-        **fields,
+        run_id: str | None = None,
+        gate_passed: int | None = None,
+        failure_reasons: list[str] | None = None,
+        total_score: float | None = None,
+        estimated_cost: float | None = None,
     ) -> str:
         """幂等写入 case_run；唯一键 (experiment_id, dataset_item_id, variant_name, repeat_no)。"""
         case_run_id = _new_id()
         now = now_local()
+        mutable_fields = {
+            "run_id": run_id,
+            "gate_passed": gate_passed,
+            "failure_reasons_json": _json_dumps(failure_reasons)
+            if failure_reasons is not None
+            else None,
+            "total_score": total_score,
+            "estimated_cost": estimated_cost,
+        }
         async with SessionLocal() as session:
             existing = await session.scalar(
                 select(EvalCaseRun).where(
@@ -718,8 +746,7 @@ class EvalRepository:
                 )
             )
             if existing is not None:
-                # 更新可变字段
-                updates = {k: v for k, v in fields.items() if v is not None}
+                updates = {key: value for key, value in mutable_fields.items() if value is not None}
                 if updates:
                     await session.execute(
                         EvalCaseRun.__table__.update()
@@ -733,18 +760,13 @@ class EvalRepository:
                     id=case_run_id,
                     experiment_id=experiment_id,
                     dataset_item_id=dataset_item_id,
-                    research_id=fields.get("research_id"),
-                    run_id=fields.get("run_id"),
+                    run_id=run_id,
                     variant_name=variant_name,
                     repeat_no=repeat_no,
-                    gate_passed=fields.get("gate_passed"),
-                    failure_reasons_json=_json_dumps(fields.get("failure_reasons")),
-                    total_score=fields.get("total_score"),
-                    input_tokens=fields.get("input_tokens"),
-                    output_tokens=fields.get("output_tokens"),
-                    duration_ms=fields.get("duration_ms"),
-                    estimated_cost=fields.get("estimated_cost"),
-                    result_json=_json_dumps(fields.get("result")),
+                    gate_passed=gate_passed,
+                    failure_reasons_json=_json_dumps(failure_reasons),
+                    total_score=total_score,
+                    estimated_cost=estimated_cost,
                     create_time=now,
                 )
             )
@@ -765,13 +787,10 @@ class EvalRepository:
         judge_model: str | None = None,
         reason: str | None = None,
         details: dict | None = None,
-        trace_id: str | None = None,
-        report_artifact_id: str | None = None,
     ) -> None:
         """幂等写分数；唯一键 (case_run_id, metric_name, evaluator_version)。
 
         同一报告可被不同 evaluator_version 重评且结果不互相覆盖。
-        trace_id/report_artifact_id 提供 score→trace/artifact 直链（§18 跳转）。
         """
         now = now_local()
         async with SessionLocal() as session:
@@ -787,8 +806,6 @@ class EvalRepository:
                 judge_model=judge_model,
                 reason=reason,
                 details_json=_json_dumps(details),
-                trace_id=trace_id,
-                report_artifact_id=report_artifact_id,
                 create_time=now,
             )
             stmt = stmt.on_duplicate_key_update(
@@ -799,8 +816,6 @@ class EvalRepository:
                 judge_model=judge_model,
                 reason=reason,
                 details_json=_json_dumps(details),
-                trace_id=trace_id,
-                report_artifact_id=report_artifact_id,
             )
             await session.execute(stmt)
             await session.commit()
@@ -822,8 +837,6 @@ class EvalRepository:
                     "evaluator_name": r.evaluator_name,
                     "evaluator_version": r.evaluator_version,
                     "reason": r.reason,
-                    "trace_id": r.trace_id,  # §18 跳转
-                    "report_artifact_id": r.report_artifact_id,
                 }
                 for r in rows
             ]
@@ -863,16 +876,3 @@ async def safe_record(coro_factory, *, context: str = "") -> None:
         await coro_factory()
     except Exception:  # noqa: BLE001
         logger.exception("eval record failed %s", context)
-
-
-async def ensure_eval_tables(engine: AsyncEngine | None = None) -> None:
-    """测试辅助：在给定 engine 上建 eval 表。生产走 ensure_tables。"""
-    from app.domain.models import Base
-
-    target = engine
-    if target is None:
-        from app.infrastructure.db import engine as default_engine
-
-        target = default_engine
-    async with target.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)

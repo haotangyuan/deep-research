@@ -1,9 +1,9 @@
-"""Eval MVP v2 — EvalScore trace_id/report_artifact_id 跳转列测试（§18）。
+"""Eval MVP v2 — Score 到 Run/Artifact 的规范化关联测试。
 
 验证：
-- EvalScore ORM 有 trace_id / report_artifact_id 列。
-- evaluate_case_run 写 score 时回填 trace_id + report_artifact_id（来自 run.trace_id + report_final artifact.id）。
-- list_scores 返回 trace_id / report_artifact_id，可从 score 直跳 trace/artifact。
+- EvalScore 不重复保存 trace_id / report_artifact_id。
+- score -> case_run -> run 能定位 trace。
+- case_run.run_id -> report_final artifact 能定位被评报告。
 
 DB 测试走真实 MySQL；不 mock。
 """
@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import select
 
 from app.core.config import get_settings
-from app.domain.models import EvalCaseRun, EvalScore, ResearchArtifact, ResearchRun
+from app.domain.models import EvalCaseRun, ResearchArtifact, ResearchRun
 from app.infrastructure.db import SessionLocal
 from app.infrastructure.eval_repository import EvalRepository, eval_repository
 from evals.runner import evaluate_case_run
@@ -73,7 +73,7 @@ async def _truncate_eval_tables():
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not DB_AVAILABLE, reason=DB_REASON)
-async def test_score_carries_trace_id_and_report_artifact_id() -> None:
+async def test_score_uses_normalized_case_run_to_trace_and_artifact_chain() -> None:
     repo = EvalRepository()
     research_id = "research-trace-" + uuid.uuid4().hex[:8]
     # 建一个带 trace_id 的 run
@@ -149,21 +149,22 @@ async def test_score_carries_trace_id_and_report_artifact_id() -> None:
     # 跑评估（无 chat_fn，确定性 + gate）
     await evaluate_case_run(case_run_id)
 
-    # 验证 eval_score 行带 trace_id + report_artifact_id
     scores = await eval_repository.list_scores(case_run_id)
     assert scores, "应有 score 写入"
     for s in scores:
-        assert s["trace_id"] == "0123456789abcdef0123456789abcdef"
-        assert s["report_artifact_id"] == report_artifact_id
+        assert "trace_id" not in s
+        assert "report_artifact_id" not in s
 
-    # 直跳验证：能从 trace_id 反查到 run，从 report_artifact_id 反查到 artifact
+    # 规范化关联：score -> case_run -> run/trace；run_id -> report_final artifact。
     async with SessionLocal() as session:
-        score_row = await session.scalar(select(EvalScore).where(EvalScore.case_run_id == case_run_id).limit(1))
-        # score.trace_id → research_run
-        run = await session.scalar(select(ResearchRun).where(ResearchRun.trace_id == score_row.trace_id))
+        case_run = await session.scalar(select(EvalCaseRun).where(EvalCaseRun.id == case_run_id))
+        run = await session.scalar(select(ResearchRun).where(ResearchRun.id == case_run.run_id))
         assert run is not None and run.id == run_id
-        # score.report_artifact_id → research_artifact
+        assert run.trace_id == "0123456789abcdef0123456789abcdef"
         art2 = await session.scalar(
-            select(ResearchArtifact).where(ResearchArtifact.id == score_row.report_artifact_id)
+            select(ResearchArtifact).where(
+                ResearchArtifact.run_id == case_run.run_id,
+                ResearchArtifact.artifact_type == "report_final",
+            )
         )
-        assert art2 is not None and art2.artifact_type == "report_final"
+        assert art2 is not None and art2.id == report_artifact_id

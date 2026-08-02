@@ -19,7 +19,7 @@ class ReviewerEffectivenessEvaluator(BaseEvaluator):
 
     async def evaluate(self, ctx: EvalContext) -> list[MetricResult]:
         run = ctx.run or {}
-        # run 行若无 reviewer tokens，记 0；真实值由 runner 从 research_stage_usage 聚合注入。
+        # Reviewer token 由 runner 直接从 research_llm_call 聚合。
         reviewer_tokens = int(run.get("reviewer_tokens") or 0)
         consensus = run.get("review_consensus")  # "continue" | "report" | None
         outcome = str(run.get("outcome") or "").lower()

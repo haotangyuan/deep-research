@@ -1,0 +1,21 @@
+[
+  {
+    "iteration_id": "7789a71fa21c49daac2729549f6b47bb",
+    "experiment_id": "7789a71fa21c49daac2729549f6b47bb",
+    "created_at": "2026-07-29T17:46:44+08:00",
+    "dataset": {
+      "name": "deep_research_formal_v1",
+      "version": "1"
+    },
+    "case_count": 6,
+    "problem_codes": [
+      "citation_claim_linkage_failure",
+      "scope_clarification_error",
+      "section_revision_claim_loss",
+      "report_merge_information_loss",
+      "reviewer_uplift_not_measurable"
+    ],
+    "validation_status": "partial",
+    "record": "7789a71fa21c49daac2729549f6b47bb.json"
+  }
+]

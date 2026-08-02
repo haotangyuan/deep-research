@@ -1,7 +1,7 @@
 """Eval MVP v2 — Round Delta 评估器（§9.2）。
 
 跨轮增量价值：quality_delta_per_round / marginal_quality_per_1k_tokens / gap_closure_rate。
-每轮 quality/gaps/tokens 来自 research_span_attribute（trace 标量本地落地），
+每轮 quality/gaps 来自 round_review Artifact，tokens 来自 research_llm_call，
 由 runner 装配进 ``ctx.review_attributes``（{round_no: {attr_key: value}}）。
 """
 from __future__ import annotations

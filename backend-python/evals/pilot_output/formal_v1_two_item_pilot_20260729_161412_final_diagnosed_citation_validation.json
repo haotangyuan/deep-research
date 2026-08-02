@@ -1,0 +1,135 @@
+{
+  "experiment_id": "7789a71fa21c49daac2729549f6b47bb",
+  "validation_scope": "citation-only Hard Gate：citation_traceability 与 unsupported_critical_claim_count；不重跑 LLM Judge",
+  "results": [
+    {
+      "item_id": "fv1_fact_02",
+      "variant": "MEDIUM",
+      "run_id": "3048e4039bc94bd1b81d1d1f4f117e43",
+      "before": {
+        "citation_traceability": 0.0,
+        "unsupported_critical_claim_count": 0.0,
+        "failure_reason_codes": [
+          "dangling_citation"
+        ]
+      },
+      "after": {
+        "claim_count": 14,
+        "cited_claim_count": 14,
+        "citation_traceability": 1.0,
+        "unsupported_critical_claim_count": 0,
+        "citation_gate_passed": true,
+        "failure_reason_codes": []
+      }
+    },
+    {
+      "item_id": "fv1_fact_02",
+      "variant": "HIGH",
+      "run_id": "0d795d93424949fdb15aa97629bd4876",
+      "before": {
+        "citation_traceability": 0.0,
+        "unsupported_critical_claim_count": 3.0,
+        "failure_reason_codes": [
+          "dangling_citation",
+          "unsupported_critical_claim"
+        ]
+      },
+      "after": {
+        "claim_count": 17,
+        "cited_claim_count": 17,
+        "citation_traceability": 1.0,
+        "unsupported_critical_claim_count": 0,
+        "citation_gate_passed": true,
+        "failure_reason_codes": []
+      }
+    },
+    {
+      "item_id": "fv1_fact_02",
+      "variant": "ULTRA",
+      "run_id": "d74838f21c1e4f8a9f1c765e8d8cbdc0",
+      "before": {
+        "citation_traceability": 1.0,
+        "unsupported_critical_claim_count": 0.0,
+        "failure_reason_codes": []
+      },
+      "after": {
+        "claim_count": 31,
+        "cited_claim_count": 31,
+        "citation_traceability": 1.0,
+        "unsupported_critical_claim_count": 0,
+        "citation_gate_passed": true,
+        "failure_reason_codes": []
+      }
+    },
+    {
+      "item_id": "fv1_ec_01",
+      "variant": "MEDIUM",
+      "run_id": "e1c0722623354fa59d5a7c1e5ec73d0e",
+      "before": {
+        "citation_traceability": 0.0975609756097561,
+        "unsupported_critical_claim_count": 51.0,
+        "failure_reason_codes": [
+          "dangling_citation",
+          "unsupported_critical_claim"
+        ]
+      },
+      "after": {
+        "claim_count": 24,
+        "cited_claim_count": 23,
+        "citation_traceability": 0.9583333333333334,
+        "unsupported_critical_claim_count": 1,
+        "citation_gate_passed": false,
+        "failure_reason_codes": [
+          "unsupported_critical_claim"
+        ]
+      }
+    },
+    {
+      "item_id": "fv1_ec_01",
+      "variant": "HIGH",
+      "run_id": "688ad5f44156427ca278a8c5d4cf3320",
+      "before": {
+        "citation_traceability": 0.0,
+        "unsupported_critical_claim_count": 84.0,
+        "failure_reason_codes": [
+          "dangling_citation",
+          "unsupported_critical_claim"
+        ]
+      },
+      "after": {
+        "claim_count": 33,
+        "cited_claim_count": 23,
+        "citation_traceability": 0.696969696969697,
+        "unsupported_critical_claim_count": 7,
+        "citation_gate_passed": false,
+        "failure_reason_codes": [
+          "dangling_citation",
+          "unsupported_critical_claim"
+        ]
+      }
+    },
+    {
+      "item_id": "fv1_ec_01",
+      "variant": "ULTRA",
+      "run_id": "7d0c2f18c4fb450fa77c88378b61e524",
+      "before": {
+        "citation_traceability": null,
+        "unsupported_critical_claim_count": 0.0,
+        "failure_reason_codes": [
+          "workflow_failed",
+          "report_empty",
+          "missing_required_points",
+          "critical_fact_error"
+        ]
+      },
+      "after": {
+        "claim_count": 0,
+        "cited_claim_count": 0,
+        "citation_traceability": null,
+        "unsupported_critical_claim_count": 0,
+        "citation_gate_passed": true,
+        "failure_reason_codes": []
+      }
+    }
+  ]
+}

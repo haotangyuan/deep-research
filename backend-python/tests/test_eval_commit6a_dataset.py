@@ -9,7 +9,7 @@ import uuid
 
 import pytest
 import pymysql
-from sqlalchemy import select
+from sqlalchemy import UniqueConstraint, select
 
 from app.core.config import get_settings
 from app.core.timeutil import now_local
@@ -18,11 +18,48 @@ from app.domain.models import (
     EvalDatasetItem,
     EvalExperiment,
     EvalScore,
+    ResearchArtifact,
+    ResearchLlmCall,
 )
 from app.infrastructure.db import SessionLocal
 from app.infrastructure.eval_repository import EvalRepository
 
 settings = get_settings()
+
+
+def test_eval_core_schema_has_no_duplicate_fact_columns() -> None:
+    artifact_columns = set(ResearchArtifact.__table__.columns.keys())
+    assert {"input_tokens", "output_tokens", "duration_ms"}.isdisjoint(artifact_columns)
+
+    case_columns = set(EvalCaseRun.__table__.columns.keys())
+    assert {
+        "research_id",
+        "input_tokens",
+        "output_tokens",
+        "duration_ms",
+        "result_json",
+    }.isdisjoint(case_columns)
+
+    dataset_columns = set(EvalDatasetItem.__table__.columns.keys())
+    assert "original_budget_level" not in dataset_columns
+
+    score_columns = set(EvalScore.__table__.columns.keys())
+    assert {"trace_id", "report_artifact_id"}.isdisjoint(score_columns)
+
+    llm_unique_columns = {
+        tuple(column.name for column in constraint.columns)
+        for constraint in ResearchLlmCall.__table__.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert ("run_id", "id") not in llm_unique_columns
+
+    assert not EvalDatasetItem.__table__.c.query_snapshot.nullable
+    assert not EvalDatasetItem.__table__.c.query_sha256.nullable
+    assert not EvalCaseRun.__table__.c.experiment_id.nullable
+    assert not EvalCaseRun.__table__.c.dataset_item_id.nullable
+    assert not EvalCaseRun.__table__.c.variant_name.nullable
+    assert not EvalScore.__table__.c.case_run_id.nullable
+    assert not EvalScore.__table__.c.metric_name.nullable
 
 
 def _db_reachable() -> bool:
@@ -93,6 +130,39 @@ async def test_dataset_item_dedup_by_query_sha256() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(not DB_AVAILABLE, reason=DB_REASON)
+async def test_dataset_item_versions_are_independent_and_keep_eval_contract() -> None:
+    repo = EvalRepository()
+    query = "同一题目可在不同 Dataset 版本中独立冻结"
+    contract = {
+        "eligible_variants": ["MEDIUM", "HIGH", "ULTRA"],
+        "expected_intent": {"research_type": "tech_comparison", "should_clarify": False},
+    }
+    v1 = await repo.upsert_dataset_item(
+        dataset_name="tier_eval",
+        dataset_version="1",
+        query_snapshot=query,
+        task_type="tech_comparison",
+        required_points=[{"criterion_id": "c1", "text": "比较成本", "weight": 1}],
+        evaluation_contract=contract,
+    )
+    v2 = await repo.upsert_dataset_item(
+        dataset_name="tier_eval",
+        dataset_version="2",
+        query_snapshot=query,
+        task_type="tech_comparison",
+        required_points=[{"criterion_id": "c1", "text": "比较总拥有成本", "weight": 2}],
+        evaluation_contract=contract,
+    )
+    assert v1 != v2
+    async with SessionLocal() as session:
+        row = await session.scalar(select(EvalDatasetItem).where(EvalDatasetItem.id == v2))
+        assert row is not None
+        assert row.evaluation_contract_json is not None
+        assert '"MEDIUM"' in row.evaluation_contract_json
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not DB_AVAILABLE, reason=DB_REASON)
 async def test_experiment_and_case_run_lifecycle() -> None:
     repo = EvalRepository()
     item_id = await repo.upsert_dataset_item(
@@ -115,24 +185,16 @@ async def test_experiment_and_case_run_lifecycle() -> None:
         dataset_item_id=item_id,
         variant_name="MEDIUM",
         repeat_no=0,
-        research_id="r1",
         run_id="run1",
         gate_passed=1,
-        input_tokens=81000,
-        output_tokens=30000,
-        duration_ms=12000,
-        result={"report": "..."},
     )
     cr_high = await repo.upsert_case_run(
         experiment_id=exp_id,
         dataset_item_id=item_id,
         variant_name="HIGH",
         repeat_no=0,
-        research_id="r2",
         run_id="run2",
         gate_passed=1,
-        input_tokens=132000,
-        output_tokens=38000,
     )
     # 同 variant+repeat replay → 返回同一 case_run_id
     cr_high_replay = await repo.upsert_case_run(
@@ -141,8 +203,6 @@ async def test_experiment_and_case_run_lifecycle() -> None:
         variant_name="HIGH",
         repeat_no=0,
         run_id="run2b",
-        input_tokens=132000,
-        output_tokens=38000,
         total_score=0.82,
     )
     assert cr_high == cr_high_replay
